@@ -123,4 +123,92 @@ with right:
             except Exception:
                 pass
 
+
+# ---------- Admin: Database Explorer ----------
+st.divider()
+st.subheader("Admin: Database Explorer")
+
+def _list_tables(db_path: str) -> list[str]:
+    if not os.path.exists(db_path):
+        return []
+    con = sqlite3.connect(db_path)
+    try:
+        rows = con.execute("""
+            SELECT name
+            FROM sqlite_schema
+            WHERE type='table' AND name NOT LIKE 'sqlite_%'
+            ORDER BY name
+        """).fetchall()
+        return [r[0] for r in rows]
+    finally:
+        con.close()
+
+def _get_table_schema(db_path: str, table: str):
+    con = sqlite3.connect(db_path)
+    try:
+        cols = con.execute(f"PRAGMA table_info('{table}')").fetchall()  # cid, name, type, notnull, dflt_value, pk
+        fks  = con.execute(f"PRAGMA foreign_key_list('{table}')").fetchall()
+        ddl_row = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+            (table,)
+        ).fetchone()
+        idx = con.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name=? AND sql NOT NULL ORDER BY name",
+            (table,)
+        ).fetchall()
+        ddl = ddl_row[0] if ddl_row else ""
+        return cols, fks, ddl, idx
+    finally:
+        con.close()
+
+tables = _list_tables(DB_PATH)
+
+if not tables:
+    st.info("No user tables found yet. Run a scrape or your seed/init script to create tables.")
+else:
+    leftA, rightA = st.columns([1, 3])
+    with leftA:
+        table = st.selectbox("Choose a table", tables, index=0)
+        preview_n = st.slider("Preview rows", 5, 200, 50, step=5)
+
+    with rightA:
+        # live preview
+        try:
+            con = sqlite3.connect(DB_PATH)
+            df_preview = pd.read_sql_query(f"SELECT * FROM {table} LIMIT ?", con, params=(preview_n,))
+        except Exception as e:
+            df_preview = pd.DataFrame({"error": [repr(e)]})
+        finally:
+            try: con.close()
+            except: pass
+        st.write(f"Preview: `{table}`")
+        st.dataframe(df_preview, use_container_width=True, height=320)
+
+    # schema + DDL
+    cols, fks, ddl, idx = _get_table_schema(DB_PATH, table)
+
+    cdf = pd.DataFrame(cols, columns=["cid", "name", "type", "notnull", "dflt_value", "pk"])
+    st.markdown("**Columns**")
+    st.dataframe(cdf.drop(columns=["cid"]), use_container_width=True, height=220)
+
+    if fks:
+        fkdf = pd.DataFrame(fks, columns=[
+            "id","seq","table","from","to","on_update","on_delete","match"
+        ])
+        st.markdown("**Foreign Keys**")
+        st.dataframe(fkdf[["table","from","to","on_update","on_delete","match"]], use_container_width=True, height=160)
+    else:
+        st.caption("No foreign keys defined.")
+
+    if idx:
+        with st.expander("Indexes"):
+            idf = pd.DataFrame(idx, columns=["name","sql"])
+            st.dataframe(idf, use_container_width=True, height=180)
+    else:
+        st.caption("No indexes (besides implicit PK).")
+
+    with st.expander("CREATE TABLE DDL"):
+        st.code(ddl or "-- (no DDL found)", language="sql")
+
+
 st.button("🔄 Refresh data", on_click=lambda: st.rerun())

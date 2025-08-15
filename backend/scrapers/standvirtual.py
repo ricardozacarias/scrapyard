@@ -297,3 +297,36 @@ async def run(
 
         await browser.close()
         return rows
+
+
+# --- new helper: fetch search page RAW html without parsing ---
+async def fetch_search_html(
+    price_max: Optional[int] = 20000,
+    headless: bool = True,
+    timeout_ms: int = 30000,
+) -> tuple[str, str]:
+    """
+    Returns (url, html) for the search page. Separate from run() so we can
+    store a RAW snapshot before parsing listings.
+    """
+    search_url = build_search_url(price_max)
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=headless,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        ctx = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            locale="pt-PT",
+            timezone_id="Europe/Lisbon",
+            viewport={"width": 1366, "height": 900},
+        )
+        page = await ctx.new_page()
+        await page.goto(search_url, wait_until="domcontentloaded", timeout=timeout_ms)
+        html = await page.content()
+        await browser.close()
+        return search_url, html
