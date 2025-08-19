@@ -1,0 +1,8 @@
+# database files
+scraper.db
+# Python cache
+__pycache__/
+
+#virtual environment
+.venv/
+

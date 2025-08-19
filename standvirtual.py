@@ -134,18 +134,34 @@ def _normalize_and_dedupe(records):
         cleaned.append(r)
     return cleaned
 
-def run_scrape(max_price=15000, pages=2, polite_delay=(1, 4)):
-    """Fetch N pages, normalize, upsert to DB, return a small summary dict."""
+def run_scrape(max_price=15000, pages=2, polite_delay=(1, 4), on_progress=None):
+    """Fetch N pages, normalize, upsert to DB, return a small summary dict.
+    on_progress: optional callback called as on_progress(i, total) after each page attempt.
+    """
+    if on_progress is None:
+        on_progress = lambda i, total: None  # no-op by default
+
     all_recs = []
     pages_fetched = 0
-    for p in range(1, pages + 1):
+    total_pages = int(pages)
+
+    for p in range(1, total_pages + 1):
         html = fetch_html(max_price=max_price, page=p)
         recs = parse_page(html)
+
+        # report progress even if this page is empty (so the UI moves)
+        # we report 'p' here (attempted page) rather than 'pages_fetched'
+        on_progress(p, total_pages)
+
         if not recs:
             break
+
         all_recs.extend(recs)
         pages_fetched += 1
-        time.sleep(random.uniform(*polite_delay))  # politeness
+
+        # politeness delay
+        time.sleep(random.uniform(*polite_delay))
+
     cleaned = _normalize_and_dedupe(all_recs)
     upserted = save_cars(cleaned)
     return {
@@ -154,6 +170,7 @@ def run_scrape(max_price=15000, pages=2, polite_delay=(1, 4)):
         "cleaned_records": len(cleaned),
         "upserted": upserted,
     }
+
 
 
 def main():

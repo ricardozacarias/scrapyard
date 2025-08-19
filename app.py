@@ -50,7 +50,7 @@ def read_schema():
 # --- UI
 st.title("Standvirtual Scraper Admin")
 
-tab_scrape, tab_explore = st.tabs(["🧲 Scrape", "🗂 Explore DB"])
+tab_scrape, tab_explore, tab_analysis = st.tabs(["🧲 Scrape", "🗂 Explore DB", "📊 Analysis"])
 
 with tab_scrape:
     st.subheader("Trigger scrape")
@@ -64,12 +64,28 @@ with tab_scrape:
 
     if run_btn:
         ensure_db()
-        with st.spinner("Scraping…"):
-            summary = run_scrape(
-                max_price=int(max_price),
-                pages=int(pages)
-            )
-        st.success("Done.")
+
+        # progress UI
+        prog = st.progress(0)
+        status = st.empty()
+
+        def _on_progress(i, total):
+            pct = int(i * 100 / max(total, 1))
+            prog.progress(pct)
+            status.write(f"Scraping page {i}/{total}…")
+
+        # run scraper with progress callback
+        summary = run_scrape(
+            max_price=int(max_price),
+            pages=int(pages),
+            on_progress=_on_progress,  # <-- progress callback
+        )
+
+        # finalize progress UI
+        prog.progress(100)
+        status.success("Scrape complete.")
+
+        # metrics + preview
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Pages fetched", summary["pages_fetched"])
         c2.metric("Raw records", summary["raw_records"])
@@ -79,6 +95,7 @@ with tab_scrape:
         st.caption("Latest rows (by scraped_at)")
         latest = read_table(limit=50, order_by="scraped_at", order_dir="DESC")
         st.dataframe(latest, use_container_width=True)
+
 
 
 with tab_explore:
@@ -107,7 +124,7 @@ with tab_explore:
         if st.button("🔄 Refresh table", help="Clear cache and reload from database"):
             read_table.clear()   # clears the @st.cache_data for read_table
             st.toast("Table refreshed")
-            st.experimental_rerun()
+            st.rerun() 
 
     df = read_table(
         limit=limit,
@@ -116,3 +133,72 @@ with tab_explore:
         order_dir=order_dir,
     )
     st.dataframe(df, use_container_width=True)
+    
+with tab_analysis:
+    st.subheader("Scatter analysis")
+    ensure_db()
+
+    # basic controls
+    max_rows = st.slider("Max rows", 200, 10000, 2000, 200)
+
+    # small reload button
+    a_col1, _ = st.columns([1, 9])
+    with a_col1:
+        if st.button("🔄 Reload data", key="analysis_reload", help="Clear cache and reload from database"):
+            read_table.clear()
+            st.toast("Data reloaded")
+            st.rerun()
+
+    # load data
+    df = read_table(limit=max_rows, order_by=None)
+
+    # ---- filters: Brand + Model Year range
+    f1, f2 = st.columns([1, 3])
+
+    # Brand dropdown (exact match; "All brands" keeps all)
+    brands = []
+    if "brand" in df.columns:
+        brands = sorted([b for b in df["brand"].dropna().unique().tolist() if str(b).strip()])
+    brand_choice = f1.selectbox("Brand", options=(["All brands"] + brands) if brands else ["All brands"])
+
+    # Model year range (only if data exists)
+    yr_min_sel = yr_max_sel = None
+    if "model_year" in df.columns and df["model_year"].notna().any():
+        years = df["model_year"].dropna().astype(int)
+        yr_min, yr_max = int(years.min()), int(years.max())
+        yr_min_sel, yr_max_sel = f2.slider(
+            "Model year range",
+            min_value=yr_min,
+            max_value=yr_max,
+            value=(yr_min, yr_max),
+            step=1,
+        )
+    else:
+        f2.caption("No model_year values available yet.")
+
+    # apply filters
+    dff = df.copy()
+    if brand_choice != "All brands" and "brand" in dff.columns:
+        dff = dff[dff["brand"] == brand_choice]
+    if yr_min_sel is not None and "model_year" in dff.columns:
+        dff = dff[dff["model_year"].notna()]
+        dff = dff[dff["model_year"].astype(int).between(yr_min_sel, yr_max_sel, inclusive="both")]
+
+    # choose numeric columns for scatter
+    num_cols = list(dff.select_dtypes(include="number").columns)
+    if len(num_cols) < 2:
+        st.info("Not enough numeric columns to plot. Try scraping data first.")
+    else:
+        c1, c2 = st.columns(2)
+        default_x = num_cols.index("price") if "price" in num_cols else 0
+        default_y = (
+            num_cols.index("mileage_km")
+            if "mileage_km" in num_cols
+            else (1 if len(num_cols) > 1 else 0)
+        )
+        x = c1.selectbox("X axis", options=num_cols, index=default_x)
+        y = c2.selectbox("Y axis", options=num_cols, index=default_y)
+
+        st.scatter_chart(dff, x=x, y=y, use_container_width=True)
+        st.caption(f"Rows plotted: {len(dff)}")
+
