@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import altair as alt
 
 from db import DB_PATH, SCHEMA_PATH  # points to "scraper.db" and "schema.sql"
 from standvirtual import run_scrape
@@ -135,6 +136,9 @@ with tab_explore:
     st.dataframe(df, use_container_width=True)
     
 with tab_analysis:
+    import altair as alt
+    import pandas as pd
+
     st.subheader("Scatter analysis")
     ensure_db()
 
@@ -152,40 +156,64 @@ with tab_analysis:
     # load data
     df = read_table(limit=max_rows, order_by=None)
 
-    # ---- filters: Brand + Model Year range
-    f1, f2 = st.columns([1, 3])
-
-    # Brand dropdown (exact match; "All brands" keeps all)
+    # ---------- Brand filter ----------
+    f1, _ = st.columns([1, 3])
     brands = []
     if "brand" in df.columns:
         brands = sorted([b for b in df["brand"].dropna().unique().tolist() if str(b).strip()])
     brand_choice = f1.selectbox("Brand", options=(["All brands"] + brands) if brands else ["All brands"])
 
-    # Model year range (only if data exists)
-    yr_min_sel = yr_max_sel = None
-    if "model_year" in df.columns and df["model_year"].notna().any():
-        years = df["model_year"].dropna().astype(int)
-        yr_min, yr_max = int(years.min()), int(years.max())
-        yr_min_sel, yr_max_sel = f2.slider(
-            "Model year range",
-            min_value=yr_min,
-            max_value=yr_max,
-            value=(yr_min, yr_max),
-            step=1,
-        )
-    else:
-        f2.caption("No model_year values available yet.")
+    # ---------- Dynamic numeric range sliders ----------
+    num_filters = {}
+    num_cols_all = list(df.select_dtypes(include="number").columns)
 
-    # apply filters
+    if num_cols_all:
+        st.markdown("### Filters")
+        cols = st.columns(2)  # lay sliders in two columns
+        for i, col in enumerate(num_cols_all):
+            series = df[col].dropna().astype(float)
+            if series.empty:
+                continue
+            vmin, vmax = float(series.min()), float(series.max())
+
+            # If column is integer-like, use int slider; else float slider
+            is_intlike = (series % 1 == 0).all()
+
+            if is_intlike:
+                sel_min, sel_max = cols[i % 2].slider(
+                    f"{col}",
+                    min_value=int(vmin),
+                    max_value=int(vmax),
+                    value=(int(vmin), int(vmax)),
+                    step=1,
+                )
+                num_filters[col] = (float(sel_min), float(sel_max))
+            else:
+                step = (vmax - vmin) / 100.0 if vmax > vmin else 1.0
+                sel_min, sel_max = cols[i % 2].slider(
+                    f"{col}",
+                    min_value=vmin,
+                    max_value=vmax,
+                    value=(vmin, vmax),
+                    step=step,
+                )
+                num_filters[col] = (sel_min, sel_max)
+
+    # ---------- Apply filters ----------
     dff = df.copy()
+
     if brand_choice != "All brands" and "brand" in dff.columns:
         dff = dff[dff["brand"] == brand_choice]
-    if yr_min_sel is not None and "model_year" in dff.columns:
-        dff = dff[dff["model_year"].notna()]
-        dff = dff[dff["model_year"].astype(int).between(yr_min_sel, yr_max_sel, inclusive="both")]
 
-    # choose numeric columns for scatter
+    for col, (lo, hi) in num_filters.items():
+        if col in dff.columns:
+            dff = dff[dff[col].notna()]
+            dff = dff[(dff[col].astype(float) >= float(lo)) & (dff[col].astype(float) <= float(hi))]
+
+    # ---------- Plot ----------
+    chart = None
     num_cols = list(dff.select_dtypes(include="number").columns)
+
     if len(num_cols) < 2:
         st.info("Not enough numeric columns to plot. Try scraping data first.")
     else:
@@ -199,6 +227,25 @@ with tab_analysis:
         x = c1.selectbox("X axis", options=num_cols, index=default_x)
         y = c2.selectbox("Y axis", options=num_cols, index=default_y)
 
-        st.scatter_chart(dff, x=x, y=y, use_container_width=True)
+        if not dff.empty:
+            x_min, x_max = dff[x].min(), dff[x].max()
+            y_min, y_max = dff[y].min(), dff[y].max()
+
+            chart = (
+                alt.Chart(dff)
+                .mark_circle(size=60, opacity=0.6)
+                .encode(
+                    x=alt.X(x, scale=alt.Scale(domain=[x_min, x_max])),
+                    y=alt.Y(y, scale=alt.Scale(domain=[y_min, y_max])),
+                    tooltip=list(dff.columns),
+                )
+                .interactive()
+            )
+
+    if chart is not None:
+        st.altair_chart(chart, use_container_width=True)
         st.caption(f"Rows plotted: {len(dff)}")
+    else:
+        st.info("No data to plot with the current filters.")
+
 
