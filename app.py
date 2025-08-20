@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 import altair as alt
+import numpy as np
 
 from db import DB_PATH, SCHEMA_PATH  # points to "scraper.db" and "schema.sql"
 from standvirtual import run_scrape
@@ -47,6 +48,46 @@ def read_schema():
     df = pd.read_sql_query("PRAGMA table_info(cars);", con)
     con.close()
     return df
+
+def apply_categorical_filters(df: pd.DataFrame, key_prefix: str = "catf_") -> pd.DataFrame:
+    """
+    Renders multiselect dropdowns for all categorical columns and
+    returns the dataframe filtered by the selected values.
+
+    Categorical = object, category, or bool dtypes.
+    """
+    if df is None or df.empty:
+        return df
+
+    # Detect categorical columns (object/category/bool).
+    cat_cols = list(df.select_dtypes(include=["object", "category", "bool"]).columns)
+
+    if not cat_cols:
+        return df  # nothing to filter
+
+    st.markdown("#### Filters (categorical)")
+    fdf = df.copy()
+
+    # Use a compact two-column layout to avoid vertical bloat (optional)
+    cols = st.columns(2) if len(cat_cols) > 1 else [st]
+
+    for i, col in enumerate(cat_cols):
+        options = sorted([v for v in fdf[col].dropna().unique()])
+        # Default to all values selected
+        default_vals = options
+        # Put widgets in alternating columns for compactness
+        with cols[i % len(cols)]:
+            selected = st.multiselect(
+                label=f"{col}",
+                options=options,
+                default=default_vals,
+                key=f"{key_prefix}{col}",
+                help="Filter the plot data by this category"
+            )
+        if selected and len(selected) < len(options):
+            fdf = fdf[fdf[col].isin(selected)]
+
+    return fdf
 
 # --- UI
 st.title("Standvirtual Scraper Admin")
@@ -136,8 +177,6 @@ with tab_explore:
     st.dataframe(df, use_container_width=True)
     
 with tab_analysis:
-    import altair as alt
-    import pandas as pd
 
     st.subheader("Scatter analysis")
     ensure_db()
@@ -156,12 +195,29 @@ with tab_analysis:
     # load data
     df = read_table(limit=max_rows, order_by=None)
 
-    # ---------- Brand filter ----------
-    f1, _ = st.columns([1, 3])
-    brands = []
-    if "brand" in df.columns:
-        brands = sorted([b for b in df["brand"].dropna().unique().tolist() if str(b).strip()])
-    brand_choice = f1.selectbox("Brand", options=(["All brands"] + brands) if brands else ["All brands"])
+    # ---------- Categorical dropdown filters (auto) ----------
+    cat_filters = {}
+    cat_cols = list(df.select_dtypes(include=["object", "category", "bool"]).columns)
+
+    # Optional: hide columns that aren't useful to filter on
+    hide_cats = {"listing_id", "url", "title", "scraped_at"}
+    cat_cols = [c for c in cat_cols if c not in hide_cats]
+
+    if cat_cols:
+        st.markdown("### Categorical filters")
+        ccols = st.columns(2)
+        for i, col in enumerate(sorted(cat_cols)):
+            opts = sorted([v for v in df[col].dropna().unique().tolist() if str(v).strip()])
+            # default = all values selected
+            selected = ccols[i % 2].multiselect(
+                label=col,
+                options=opts,
+                default=opts,
+                help="Filter the plot data by this category"
+            )
+            # Only record a filter if the user narrowed it down
+            if selected and len(selected) < len(opts):
+                cat_filters[col] = set(selected)
 
     # ---------- Dynamic numeric range sliders ----------
     num_filters = {}
@@ -199,18 +255,21 @@ with tab_analysis:
                 )
                 num_filters[col] = (sel_min, sel_max)
 
-    # ---------- Apply filters ----------
+# ---------- Apply filters ----------
     dff = df.copy()
 
-    if brand_choice != "All brands" and "brand" in dff.columns:
-        dff = dff[dff["brand"] == brand_choice]
+    # Apply categorical filters
+    for col, allowed in cat_filters.items():
+        if col in dff.columns:
+            dff = dff[dff[col].isin(allowed)]
 
+    # Apply numeric filters
     for col, (lo, hi) in num_filters.items():
         if col in dff.columns:
             dff = dff[dff[col].notna()]
             dff = dff[(dff[col].astype(float) >= float(lo)) & (dff[col].astype(float) <= float(hi))]
 
-    # ---------- Plot ----------
+    # ---------- Plot (scatter + numpy linear regression line) ----------
     chart = None
     num_cols = list(dff.select_dtypes(include="number").columns)
 
@@ -228,24 +287,89 @@ with tab_analysis:
         y = c2.selectbox("Y axis", options=num_cols, index=default_y)
 
         if not dff.empty:
-            x_min, x_max = dff[x].min(), dff[x].max()
-            y_min, y_max = dff[y].min(), dff[y].max()
+            # Prepare data
+            mask = dff[x].notna() & dff[y].notna()
+            xs = dff.loc[mask, x].astype(float).values
+            ys = dff.loc[mask, y].astype(float).values
 
-            chart = (
-                alt.Chart(dff)
-                .mark_circle(size=60, opacity=0.6)
-                .encode(
-                    x=alt.X(x, scale=alt.Scale(domain=[x_min, x_max])),
-                    y=alt.Y(y, scale=alt.Scale(domain=[y_min, y_max])),
-                    tooltip=list(dff.columns),
+            if xs.size >= 2 and np.std(xs) > 0:
+                # scatter limits
+                x_min, x_max = float(np.min(xs)), float(np.max(xs))
+                y_min, y_max = float(np.min(ys)), float(np.max(ys))
+
+                # --- numpy linear regression ---
+                m, b = np.polyfit(xs, ys, 1)       # slope, intercept
+                x_line = np.linspace(x_min, x_max, 100)
+                y_line = m * x_line + b
+
+                # Residuals
+                y_pred = m * xs + b
+                residuals = ys - y_pred
+
+                # Outlier controls
+                col_o1, col_o2 = st.columns([1, 2])
+                method = col_o1.selectbox("Outlier method", ["Z-score", "MAD (robust)"], index=1)
+                if method == "Z-score":
+                    thr = col_o2.slider("Z-score threshold", 1.0, 5.0, 3.0, 0.1)
+                    std = float(np.std(residuals))
+                    z = residuals / std if std > 0 else np.zeros_like(residuals)
+                    is_outlier = np.abs(z) > thr
+                else:
+                    thr = col_o2.slider("MAD threshold (≈σ units)", 1.0, 7.0, 3.5, 0.1)
+                    med = float(np.median(residuals))
+                    mad = float(np.median(np.abs(residuals - med)))
+                    mad_std = 1.4826 * mad  # ≈ std
+                    score = np.abs(residuals - med) / mad_std if mad_std > 0 else np.zeros_like(residuals)
+                    is_outlier = score > thr
+
+                # Build plotting DataFrame
+                plot_df = dff.loc[mask].copy()
+                plot_df["residual"] = residuals
+                plot_df["outlier"] = is_outlier
+                
+
+                # Scatter: clickable points (open listing), gray by default, red for outliers
+                scatter = (
+                    alt.Chart(plot_df)
+                    .mark_circle(size=60, opacity=0.7)
+                    .encode(
+                        x=alt.X(x, scale=alt.Scale(domain=[x_min, x_max])),
+                        y=alt.Y(y, scale=alt.Scale(domain=[y_min, y_max])),
+                        color=alt.Color(
+                            "outlier:N",
+                            scale=alt.Scale(domain=[False, True], range=["lightgray", "crimson"]),
+                            legend=alt.Legend(title="Outlier"),
+                        ),
+                        href=alt.Href("url:N"),  # <- make points clickable
+                        tooltip=[alt.Tooltip(c) for c in plot_df.columns],
+                    )
                 )
-                .interactive()
-            )
 
-    if chart is not None:
-        st.altair_chart(chart, use_container_width=True)
-        st.caption(f"Rows plotted: {len(dff)}")
-    else:
-        st.info("No data to plot with the current filters.")
+                # Regression line (red)
+                line_df = pd.DataFrame({x: x_line, y: y_line})
+                reg_line = (
+                    alt.Chart(line_df)
+                    .mark_line(color="red", size=2)
+                    .encode(x=x, y=y)
+                )
+
+                chart = (scatter + reg_line).interactive()
+
+                # R² for reference
+                ss_res = float(np.sum((ys - y_pred) ** 2))
+                ss_tot = float(np.sum((ys - np.mean(ys)) ** 2))
+                r2 = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+                st.altair_chart(chart, use_container_width=True)
+                st.caption(
+                    f"Rows plotted: {len(xs)} · y = {m:.4f}·x + {b:.2f} · R² = {r2:.3f} · Outliers: {int(is_outlier.sum())}"
+                )
+                st.markdown(
+                    "<span style='color: #999; font-size: 0.85em;'>Tip: Ctrl + Click a point to open the car listing in a new tab.</span>",
+                     unsafe_allow_html=True
+                )
+            else:
+                st.info("Not enough variance/rows for regression with current filters.")
+
 
 
