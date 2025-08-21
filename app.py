@@ -10,6 +10,7 @@ import altair as alt
 import numpy as np
 
 from db import DB_PATH, SCHEMA_PATH  # points to "scraper.db" and "schema.sql"
+from db import backfill_cars_region_ids
 from standvirtual import run_scrape
 
 st.set_page_config(page_title="Standvirtual Scraper Admin", layout="wide")
@@ -22,6 +23,34 @@ def ensure_db():
     return con
 
 # --- small helpers
+@st.cache_data(show_spinner=False)
+def list_tables():
+    con = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;",
+        con
+    )
+    con.close()
+    return df["name"].tolist()
+
+@st.cache_data(show_spinner=False)
+def read_schema_generic(table: str):
+    con = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query(f"PRAGMA table_info({table});", con)
+    con.close()
+    return df
+
+@st.cache_data(show_spinner=False)
+def read_table_generic(table: str, limit: int = 1000, order_by: str | None = None, order_dir: str = "DESC"):
+    con = sqlite3.connect(DB_PATH)
+    q = f"SELECT * FROM {table}"
+    if order_by:
+        q += f" ORDER BY {order_by} {order_dir}"
+    q += f" LIMIT {int(limit)}"
+    df = pd.read_sql_query(q, con)
+    con.close()
+    return df
+
 @st.cache_data(show_spinner=False)
 def read_table(limit=1000, filters=None, order_by=None, order_dir="DESC"):
     con = sqlite3.connect(DB_PATH)
@@ -141,40 +170,120 @@ with tab_scrape:
 
 
 with tab_explore:
-    st.subheader("Cars table")
+    st.subheader("Explore tables")
     ensure_db()
 
-    # schema
-    with st.expander("Table schema"):
-        schema_df = read_schema()
-        st.dataframe(schema_df, use_container_width=True)
+    # --- Table picker
+    tables = list_tables()
+    if not tables:
+        st.info("No tables yet. Run a scrape first.")
+    else:
+        selected = st.selectbox("Table", options=tables, index=max(0, tables.index("cars")) if "cars" in tables else 0)
+        st.caption(f"Showing: `{selected}`")
 
-    # filters
-    with st.expander("Filters"):
-        f_col1, f_col2, f_col3, f_col4 = st.columns(4)
-        brand = f_col1.text_input("brand contains")
-        city = f_col2.text_input("city contains")
-        fuel = f_col3.text_input("fuel contains")
-        seller_type = f_col4.text_input("seller_type contains")
-        limit = st.slider("Max rows", 100, 5000, 1000, 100)
-        order_by = st.selectbox("Order by", ["scraped_at", "price", "model_year", "mileage_km", "brand", "city"])
-        order_dir = st.radio("Order direction", ["DESC", "ASC"], horizontal=True)
+        # Clear caches when table changes (so schema/rows update)
+        if "explore_last_table" not in st.session_state:
+            st.session_state.explore_last_table = selected
+        if st.session_state.explore_last_table != selected:
+            read_table_generic.clear()
+            read_schema_generic.clear()
+            st.session_state.explore_last_table = selected
 
-    # --- refresh toolbar (place this just above the table)
-    toolbar_col1, _ = st.columns([1, 9])
-    with toolbar_col1:
-        if st.button("🔄 Refresh table", help="Clear cache and reload from database"):
-            read_table.clear()   # clears the @st.cache_data for read_table
-            st.toast("Table refreshed")
-            st.rerun() 
+        # --- Schema
+        with st.expander("Table schema"):
+            schema_df = read_schema_generic(selected)
+            st.dataframe(schema_df, use_container_width=True)
 
-    df = read_table(
-        limit=limit,
-        filters={"brand": brand, "city": city, "fuel": fuel, "seller_type": seller_type},
-        order_by=order_by,
-        order_dir=order_dir,
-    )
-    st.dataframe(df, use_container_width=True)
+        # --- Toolbar
+        toolbar_col1, toolbar_col2 = st.columns([1, 2])
+        with toolbar_col1:
+            if st.button("🔄 Refresh", help="Clear cache and reload this table"):
+                read_table_generic.clear()
+                read_schema_generic.clear()
+                st.toast("Reloaded")
+                st.rerun()
+        with toolbar_col2:
+            if selected == "cars":
+                # only relevant for cars
+                if st.button("🧭 Backfill region mapping", help="Map existing rows to districts"):
+                    ensure_db()
+                    from db import backfill_cars_region_ids  # lazy import to avoid circulars
+                    n = backfill_cars_region_ids()
+                    read_table_generic.clear()
+                    st.success(f"Backfilled region_id for {n} rows")
+                    st.rerun()
+
+        # --- Load rows
+        limit = st.slider("Max rows", 100, 5000, 1000, 100, key=f"lim_{selected}")
+        # Load once (unfiltered), then filter in pandas (generic)
+        df = read_table_generic(selected, limit=limit)
+
+        # --- Generic filters (same pattern you already use in Analysis)
+        # Categorical multiselects
+        cat_filters = {}
+        cat_cols = list(df.select_dtypes(include=["object", "category", "bool"]).columns)
+        # Hide very long text fields from the filter UI
+        hide_cats = {"url", "title"}
+        cat_cols = [c for c in cat_cols if c not in hide_cats]
+
+        if cat_cols:
+            with st.expander("Filters (categorical)"):
+                ccols = st.columns(2)
+                for i, col in enumerate(sorted(cat_cols)):
+                    opts = sorted([v for v in df[col].dropna().unique().tolist() if str(v).strip()])
+                    selected_opts = ccols[i % 2].multiselect(
+                        label=col,
+                        options=opts,
+                        default=opts,
+                        key=f"cat_{selected}_{col}",
+                    )
+                    if selected_opts and len(selected_opts) < len(opts):
+                        cat_filters[col] = set(selected_opts)
+
+        # Numeric sliders
+        num_filters = {}
+        num_cols_all = list(df.select_dtypes(include="number").columns)
+        if num_cols_all:
+            with st.expander("Filters (numeric)"):
+                cols = st.columns(2)
+                for i, col in enumerate(num_cols_all):
+                    series = df[col].dropna().astype(float)
+                    if series.empty:
+                        continue
+                    vmin, vmax = float(series.min()), float(series.max())
+                    is_intlike = (series % 1 == 0).all()
+                    if is_intlike:
+                        sel_min, sel_max = cols[i % 2].slider(
+                            f"{col}", min_value=int(vmin), max_value=int(vmax),
+                            value=(int(vmin), int(vmax)), step=1, key=f"num_{selected}_{col}"
+                        )
+                        num_filters[col] = (float(sel_min), float(sel_max))
+                    else:
+                        step = (vmax - vmin) / 100.0 if vmax > vmin else 1.0
+                        sel_min, sel_max = cols[i % 2].slider(
+                            f"{col}", min_value=vmin, max_value=vmax,
+                            value=(vmin, vmax), step=step, key=f"num_{selected}_{col}"
+                        )
+                        num_filters[col] = (sel_min, sel_max)
+
+        # Apply filters client-side
+        dff = df.copy()
+        for col, allowed in cat_filters.items():
+            if col in dff.columns:
+                dff = dff[dff[col].isin(allowed)]
+        for col, (lo, hi) in num_filters.items():
+            if col in dff.columns:
+                dff = dff[dff[col].notna()]
+                dff = dff[(dff[col].astype(float) >= float(lo)) & (dff[col].astype(float) <= float(hi))]
+
+        # Order by (pick from actual columns of this table)
+        order_by = st.selectbox("Order by", options=list(dff.columns), index=min(len(dff.columns)-1, 0) if not dff.columns.empty else 0, key=f"ob_{selected}")
+        order_dir = st.radio("Order direction", ["DESC", "ASC"], horizontal=True, key=f"od_{selected}")
+        if order_by:
+            dff = dff.sort_values(order_by, ascending=(order_dir == "ASC"), kind="mergesort")  # stable sort
+
+        st.dataframe(dff, use_container_width=True)
+
     
 with tab_analysis:
 
