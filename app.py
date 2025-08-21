@@ -8,41 +8,59 @@ import pandas as pd
 import streamlit as st
 import altair as alt
 import numpy as np
+import os
 
-from db import DB_PATH, SCHEMA_PATH  # points to "scraper.db" and "schema.sql"
+from db import DB_PATH, SCHEMA_PATH, connect  # points to "scraper.db" and "schema.sql"
 from db import backfill_cars_region_ids
+from db import IS_PG
 from standvirtual import run_scrape
 
-st.set_page_config(page_title="Standvirtual Scraper Admin", layout="wide")
+if "DATABASE_URL" in st.secrets:
+    os.environ["DATABASE_URL"] = st.secrets["DATABASE_URL"]
+
+st.set_page_config(page_title="RickyScrape", layout="wide")
 
 # --- ensure DB exists / schema is applied (read-only safe if already there)
 def ensure_db():
-    con = sqlite3.connect(DB_PATH)
-    with con:
-        con.executescript(Path(SCHEMA_PATH).read_text(encoding="utf-8"))
+    con = connect()
+    if not IS_PG:
+        with con:
+            con.executescript(Path(SCHEMA_PATH).read_text(encoding="utf-8"))
     return con
 
 # --- small helpers
 @st.cache_data(show_spinner=False)
 def list_tables():
-    con = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;",
-        con
-    )
+    con = connect()
+    if IS_PG:
+        q = "SELECT tablename AS name FROM pg_catalog.pg_tables WHERE schemaname='public' ORDER BY tablename;"
+    else:
+        q = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name;"
+    df = pd.read_sql_query(q, con)
     con.close()
     return df["name"].tolist()
 
+
 @st.cache_data(show_spinner=False)
 def read_schema_generic(table: str):
-    con = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(f"PRAGMA table_info({table});", con)
+    con = connect()
+    if IS_PG:
+        q = """
+        SELECT column_name, data_type, is_nullable, column_default
+        FROM information_schema.columns
+        WHERE table_schema='public' AND table_name=%s
+        ORDER BY ordinal_position;
+        """
+        df = pd.read_sql_query(q, con, params=(table,))
+    else:
+        df = pd.read_sql_query(f"PRAGMA table_info({table});", con)
     con.close()
     return df
 
+
 @st.cache_data(show_spinner=False)
 def read_table_generic(table: str, limit: int = 1000, order_by: str | None = None, order_dir: str = "DESC"):
-    con = sqlite3.connect(DB_PATH)
+    con = connect()
     q = f"SELECT * FROM {table}"
     if order_by:
         q += f" ORDER BY {order_by} {order_dir}"
@@ -51,32 +69,44 @@ def read_table_generic(table: str, limit: int = 1000, order_by: str | None = Non
     con.close()
     return df
 
+
 @st.cache_data(show_spinner=False)
 def read_table(limit=1000, filters=None, order_by=None, order_dir="DESC"):
-    con = sqlite3.connect(DB_PATH)
+    con = connect()
     q = "SELECT * FROM cars"
     clauses = []
     params = []
     if filters:
+        ph = "%s" if IS_PG else "?"
         for col, value in filters.items():
             if value:
-                clauses.append(f"{col} LIKE ?")
+                clauses.append(f"{col} LIKE {ph}")
                 params.append(f"%{value}%")
     if clauses:
         q += " WHERE " + " AND ".join(clauses)
     if order_by:
         q += f" ORDER BY {order_by} {order_dir}"
     q += f" LIMIT {int(limit)}"
-    df = pd.read_sql_query(q, con, params=params)
+    df = pd.read_sql_query(q, con, params=params if params else None)
     con.close()
     return df
 
+
 @st.cache_data(show_spinner=False)
 def read_schema():
-    con = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query("PRAGMA table_info(cars);", con)
+    con = connect()
+    if IS_PG:
+        df = pd.read_sql_query("""
+            SELECT column_name, data_type, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='cars'
+            ORDER BY ordinal_position;
+        """, con)
+    else:
+        df = pd.read_sql_query("PRAGMA table_info(cars);", con)
     con.close()
     return df
+
 
 def apply_categorical_filters(df: pd.DataFrame, key_prefix: str = "catf_") -> pd.DataFrame:
     """
