@@ -14,7 +14,11 @@ import {
 import { scrape } from "./standvirtual";
 
 function parseCliArgs() {
+  // pnpm's nested `scrape -> start` scripts forward a stray `--` separator into
+  // argv (e.g. `pnpm scrape -- --pages 1`). Strip it so parseArgs sees only flags.
+  const args = process.argv.slice(2).filter((a) => a !== "--");
   const { values } = parseArgs({
+    args,
     options: {
       "max-price": { type: "string" },
       pages: { type: "string", default: "5" },
