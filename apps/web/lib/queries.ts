@@ -154,10 +154,12 @@ export async function getFilterOptions(): Promise<FilterOptions> {
   return { brands, fuels, sellerTypes, regions: regionRows.map((r) => r.v) };
 }
 
+// NOTE: intentionally excludes title/url. These rows are shipped to the browser
+// to render the client-side scatter, so identifying fields (ad title, link) are
+// dropped here to keep the public chart a distribution, not a downloadable
+// directory of listings. See CLAUDE.md "Data exposure".
 export interface AnalysisRow {
   id: number;
-  title: string | null;
-  url: string | null;
   brand: string | null;
   fuel: string | null;
   sellerType: string | null;
@@ -167,15 +169,13 @@ export interface AnalysisRow {
   modelYear: number | null;
 }
 
-/** Listings with the numeric fields the scatter plot uses (capped). */
+/** Listings with the numeric fields the scatter plot uses (capped, de-identified). */
 export async function getAnalysisRows(f: ListingFilters, limit = 5000): Promise<AnalysisRow[]> {
   const db = getDb();
   const where = buildWhere(f);
   return db
     .select({
       id: listings.id,
-      title: listings.title,
-      url: listings.url,
       brand: listings.brand,
       fuel: listings.fuel,
       sellerType: listings.sellerType,

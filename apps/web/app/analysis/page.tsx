@@ -12,8 +12,6 @@ export default async function AnalysisPage() {
   ]);
 
   const points = rows.map((r) => ({
-    title: r.title,
-    url: r.url,
     brand: r.brand,
     price: r.price,
     mileageKm: r.mileageKm,

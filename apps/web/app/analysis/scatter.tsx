@@ -11,9 +11,9 @@ import {
   type OutlierMethod,
 } from "@/lib/stats";
 
+// De-identified on purpose: no ad title or url. The public scatter shows the
+// distribution (brand + numerics), not links back to individual listings.
 export interface ScatterPoint {
-  title: string | null;
-  url: string | null;
   brand: string | null;
   price: number | null;
   mileageKm: number | null;
@@ -71,8 +71,7 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
       x: p.d[xKey] as number,
       y: p.d[yKey] as number,
       outlier: p.outlier,
-      url: p.d.url ?? undefined,
-      label: `${p.d.title ?? "(untitled)"}\n${FIELDS.find((f) => f.key === xKey)?.label}: ${formatNumber(p.d[xKey] as number)}\n${FIELDS.find((f) => f.key === yKey)?.label}: ${formatNumber(p.d[yKey] as number)}`,
+      label: `${p.d.brand ?? "(unknown brand)"}\n${FIELDS.find((f) => f.key === xKey)?.label}: ${formatNumber(p.d[xKey] as number)}\n${FIELDS.find((f) => f.key === yKey)?.label}: ${formatNumber(p.d[yKey] as number)}`,
     }));
     const normal = rows.filter((r) => !r.outlier);
     const outliers = rows.filter((r) => r.outlier);
@@ -87,7 +86,6 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
         fill: "#7a869a",
         fillOpacity: 0.6,
         r: 3,
-        href: "url",
         title: "label",
         tip: true,
       }),
@@ -96,7 +94,6 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
         y: "y",
         fill: "#f0506e",
         r: 4,
-        href: "url",
         title: "label",
         tip: true,
       }),
@@ -191,7 +188,7 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
           <>
             {points.length.toLocaleString("pt-PT")} points · y = {regression.slope.toFixed(4)}·x +{" "}
             {regression.intercept.toFixed(0)} · R² = {regression.r2.toFixed(3)} · {outlierCount}{" "}
-            outliers (red). Click a point to open the listing.
+            outliers (red). Hover a point for its brand and values.
           </>
         ) : (
           "Not enough variance to fit a regression with the current axes."
