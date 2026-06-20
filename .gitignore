@@ -1,11 +1,25 @@
-# database files
-scraper.db
-# Python cache
-__pycache__/
+# dependencies
+node_modules/
+.pnpm-store/
 
-#virtual environment
-.venv/
-
-# secrets
+# env / secrets
+.env
+.env.local
+.env*.local
 secrets.toml
 
+# build output
+dist/
+.next/
+out/
+*.tsbuildinfo
+
+# misc
+.DS_Store
+*.log
+.vercel
+
+# legacy python (being removed)
+scraper.db
+__pycache__/
+.venv/

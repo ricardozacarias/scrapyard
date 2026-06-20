@@ -1,0 +1,54 @@
+name: Scrape standvirtual
+
+on:
+  schedule:
+    # Daily at 05:30 UTC (06:30/07:30 Lisbon depending on DST).
+    - cron: "30 5 * * *"
+  workflow_dispatch:
+    inputs:
+      pages:
+        description: "Number of search-result pages to scrape"
+        required: false
+        default: "10"
+      max_price:
+        description: "Optional max price filter (EUR)"
+        required: false
+        default: ""
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Apply database migrations
+        run: pnpm db:migrate
+
+      - name: Run scraper
+        run: |
+          PAGES="${{ github.event.inputs.pages || '10' }}"
+          MAXP="${{ github.event.inputs.max_price }}"
+          if [ -n "$MAXP" ]; then
+            pnpm scrape -- --pages "$PAGES" --max-price "$MAXP"
+          else
+            pnpm scrape -- --pages "$PAGES"
+          fi

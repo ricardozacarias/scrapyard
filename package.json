@@ -1,0 +1,25 @@
+{
+  "name": "scrapyard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Standvirtual car marketplace scraper + live listings DB + analysis dashboard",
+  "type": "module",
+  "scripts": {
+    "db:generate": "pnpm --filter @scrapyard/db generate",
+    "db:migrate": "pnpm --filter @scrapyard/db migrate",
+    "db:studio": "pnpm --filter @scrapyard/db studio",
+    "scrape": "pnpm --filter scraper start",
+    "web:dev": "pnpm --filter web dev",
+    "web:build": "pnpm --filter web build",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.8.0"
+}
