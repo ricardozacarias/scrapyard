@@ -83,7 +83,7 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
       Plot.dot(normal, {
         x: "x",
         y: "y",
-        fill: "#7a869a",
+        fill: "#8c8c84",
         fillOpacity: 0.6,
         r: 3,
         title: "label",
@@ -92,7 +92,7 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
       Plot.dot(outliers, {
         x: "x",
         y: "y",
-        fill: "#f0506e",
+        fill: "#ff3340",
         r: 4,
         title: "label",
         tip: true,
@@ -109,7 +109,7 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
             { x: xmin, y: regression.predict(xmin) },
             { x: xmax, y: regression.predict(xmax) },
           ],
-          { x: "x", y: "y", stroke: "#4f8cff", strokeWidth: 2 },
+          { x: "x", y: "y", stroke: "#ffd400", strokeWidth: 2 },
         ),
       );
     }
@@ -119,7 +119,7 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
       height: 460,
       marginLeft: 70,
       marginBottom: 50,
-      style: { background: "transparent", color: "#e6e9ef" },
+      style: { background: "transparent", color: "#f0f0f0" },
       grid: true,
       x: { label: xLabel, labelAnchor: "center" },
       y: { label: yLabel, labelAnchor: "center" },

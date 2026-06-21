@@ -1,12 +1,14 @@
 import { parseArgs } from "node:util";
 
 import {
+  buildMunicipalityResolver,
   buildRegionResolver,
   desc,
   getDb,
   inArray,
   listings,
   priceHistory,
+  seedMunicipalities,
   seedRegions,
   sql,
 } from "@scrapyard/db";
@@ -15,6 +17,7 @@ import { scrape, type ParsedListing } from "./standvirtual";
 
 type Db = ReturnType<typeof getDb>;
 type RegionResolver = Awaited<ReturnType<typeof buildRegionResolver>>;
+type MunicipalityResolver = Awaited<ReturnType<typeof buildMunicipalityResolver>>;
 
 // Flush ingested rows to the DB every N pages. Bounds memory and, more
 // importantly, makes progress durable: a timeout/crash mid-run can cost at most
@@ -53,6 +56,7 @@ async function ingest(
   db: Db,
   scraped: ParsedListing[],
   resolveRegion: RegionResolver,
+  resolveMunicipality: MunicipalityResolver,
 ): Promise<{ upserted: number; snapshots: number }> {
   const values = scraped.map((r) => ({
     externalId: r.externalId,
@@ -61,6 +65,7 @@ async function ingest(
     city: r.city,
     region: r.region,
     regionId: resolveRegion(r.city, r.region),
+    municipalityId: resolveMunicipality(r.city, r.region),
     sellerType: r.sellerType,
     brand: r.brand,
     fuel: r.fuel,
@@ -84,6 +89,7 @@ async function ingest(
           city: sql`excluded.city`,
           region: sql`excluded.region`,
           regionId: sql`excluded.region_id`,
+          municipalityId: sql`excluded.municipality_id`,
           sellerType: sql`excluded.seller_type`,
           brand: sql`excluded.brand`,
           fuel: sql`excluded.fuel`,
@@ -136,7 +142,9 @@ async function main() {
 
   const db = getDb();
   await seedRegions(db);
+  await seedMunicipalities(db);
   const resolveRegion = await buildRegionResolver(db);
+  const resolveMunicipality = await buildMunicipalityResolver(db);
 
   // Stream-ingest: scrape() hands us a batch every FLUSH_EVERY_PAGES pages (and a
   // final partial batch at the end). We dedupe globally across batches — pagination
@@ -160,7 +168,7 @@ async function main() {
         return true;
       });
       if (fresh.length === 0) return;
-      const res = await ingest(db, fresh, resolveRegion);
+      const res = await ingest(db, fresh, resolveRegion, resolveMunicipality);
       totalUpserted += res.upserted;
       totalSnapshots += res.snapshots;
       console.log(

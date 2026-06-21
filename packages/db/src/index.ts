@@ -1,6 +1,7 @@
 export * from "./schema";
 export * from "./client";
 export * from "./regions";
+export * from "./municipalities";
 
 export type { SQL } from "drizzle-orm";
 export type { AnyPgColumn } from "drizzle-orm/pg-core";

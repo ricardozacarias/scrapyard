@@ -64,6 +64,7 @@ export const listings = pgTable(
     city: text("city"),
     region: text("region"),
     regionId: integer("region_id").references(() => regions.id),
+    municipalityId: integer("municipality_id").references(() => regions.id),
     sellerType: text("seller_type"),
     brand: text("brand"),
     fuel: text("fuel"),
@@ -84,6 +85,7 @@ export const listings = pgTable(
     index("listings_brand_idx").on(t.brand),
     index("listings_model_year_idx").on(t.modelYear),
     index("listings_region_id_idx").on(t.regionId),
+    index("listings_municipality_id_idx").on(t.municipalityId),
     index("listings_last_seen_at_idx").on(t.lastSeenAt),
   ],
 );

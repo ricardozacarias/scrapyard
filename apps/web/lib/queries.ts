@@ -236,6 +236,16 @@ export interface Summary {
   total: number;
   active: number;
   withPriceHistory: number;
+  /** Median current price across all priced listings (gauge). */
+  medianPrice: number;
+  /** Median odometer across listings with a mileage (gauge). */
+  medianMileage: number;
+  /** 24h new-listing rate ÷ trailing daily average. 1.0 = normal (gauge). */
+  marketHeat: number;
+  /** Listings first seen since midnight (local server time). */
+  newToday: number;
+  /** Listings whose latest price snapshot dropped within the last 24h. */
+  drops24h: number;
   byBrand: GroupStat[];
   byRegion: GroupStat[];
 }
@@ -247,9 +257,52 @@ export async function getSummary(): Promise<Summary> {
     SELECT
       (SELECT count(*)::int FROM listings) AS total,
       (SELECT count(*)::int FROM listings WHERE is_active) AS active,
-      (SELECT count(DISTINCT listing_id)::int FROM price_history) AS "withPriceHistory"
+      (SELECT count(DISTINCT listing_id)::int FROM price_history) AS "withPriceHistory",
+      (SELECT count(*)::int FROM listings WHERE first_seen_at >= date_trunc('day', now())) AS "newToday",
+      (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY current_price)::int
+         FROM listings WHERE current_price IS NOT NULL) AS "medianPrice",
+      (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY mileage_km)::int
+         FROM listings WHERE mileage_km IS NOT NULL) AS "medianMileage"
   `);
-  const t = rowsOf<{ total: number; active: number; withPriceHistory: number }>(totals)[0];
+  const t = rowsOf<{
+    total: number;
+    active: number;
+    withPriceHistory: number;
+    newToday: number;
+    medianPrice: number;
+    medianMileage: number;
+  }>(totals)[0];
+
+  // Market heat = listings added in the last 24h ÷ trailing daily average over
+  // the available window. ~1.0 means a typical day; >1 a busier-than-usual one.
+  const heatRows = await db.execute(sql`
+    WITH fs AS (
+      SELECT first_seen_at FROM listings WHERE first_seen_at >= now() - interval '30 days'
+    )
+    SELECT
+      (SELECT count(*)::int FROM fs WHERE first_seen_at >= now() - interval '24 hours') AS last24,
+      count(*)::int AS recent_total,
+      greatest(1, least(30, ceil(extract(epoch FROM (now() - min(first_seen_at))) / 86400)))::int AS span_days
+    FROM fs
+  `);
+  const h = rowsOf<{ last24: number; recent_total: number; span_days: number }>(heatRows)[0];
+  const avgDaily = h && h.span_days > 0 ? h.recent_total / h.span_days : 0;
+  const marketHeat = avgDaily > 0 ? (h?.last24 ?? 0) / avgDaily : 0;
+
+  // Count listings whose most recent price snapshot is a drop, within 24h.
+  const recentDrops = await db.execute(sql`
+    WITH ranked AS (
+      SELECT listing_id, price, observed_at,
+        row_number() OVER (PARTITION BY listing_id ORDER BY observed_at DESC) AS rn
+      FROM price_history
+    )
+    SELECT count(*)::int AS n
+    FROM ranked cur
+    JOIN ranked prev ON prev.listing_id = cur.listing_id AND prev.rn = 2
+    WHERE cur.rn = 1 AND prev.price > cur.price
+      AND cur.observed_at >= now() - interval '24 hours'
+  `);
+  const drops24h = rowsOf<{ n: number }>(recentDrops)[0]?.n ?? 0;
 
   const byBrand = await db.execute(sql`
     SELECT brand AS label, count(*)::int AS count,
@@ -271,9 +324,55 @@ export async function getSummary(): Promise<Summary> {
     total: t?.total ?? 0,
     active: t?.active ?? 0,
     withPriceHistory: t?.withPriceHistory ?? 0,
+    medianPrice: t?.medianPrice ?? 0,
+    medianMileage: t?.medianMileage ?? 0,
+    marketHeat,
+    newToday: t?.newToday ?? 0,
+    drops24h,
     byBrand: rowsOf<GroupStat>(byBrand),
     byRegion: rowsOf<GroupStat>(byRegion),
   };
+}
+
+export interface RegionStat {
+  name: string;
+  count: number;
+  medianPrice: number;
+}
+
+/**
+ * Median price + listing count per district, for the choropleth. Aggregates
+ * only (no per-listing rows) — safe to ship to the client. See CLAUDE.md
+ * "Data exposure".
+ */
+export async function getDistrictStats(): Promise<RegionStat[]> {
+  const db = getDb();
+  const res = await db.execute(sql`
+    SELECT r.name AS name, count(*)::int AS count,
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY l.current_price)::int AS "medianPrice"
+    FROM listings l
+    JOIN regions r ON r.id = l.region_id
+    WHERE l.current_price IS NOT NULL AND r.level = 'district'
+    GROUP BY r.name
+  `);
+  return rowsOf<RegionStat>(res);
+}
+
+/**
+ * Median price + listing count per municipality (concelho), for the high-res
+ * choropleth. Aggregates only — safe to ship to the client.
+ */
+export async function getMunicipalityStats(): Promise<RegionStat[]> {
+  const db = getDb();
+  const res = await db.execute(sql`
+    SELECT r.name AS name, count(*)::int AS count,
+      percentile_cont(0.5) WITHIN GROUP (ORDER BY l.current_price)::int AS "medianPrice"
+    FROM listings l
+    JOIN regions r ON r.id = l.municipality_id
+    WHERE l.current_price IS NOT NULL AND r.level = 'municipality'
+    GROUP BY r.name
+  `);
+  return rowsOf<RegionStat>(res);
 }
 
 /** Normalize neon-http execute() results to a plain row array. */
