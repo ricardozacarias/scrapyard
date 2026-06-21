@@ -11,7 +11,25 @@ import {
   sql,
 } from "@scrapyard/db";
 
-import { scrape } from "./standvirtual";
+import { scrape, type ParsedListing } from "./standvirtual";
+
+type Db = ReturnType<typeof getDb>;
+type RegionResolver = Awaited<ReturnType<typeof buildRegionResolver>>;
+
+// Flush ingested rows to the DB every N pages. Bounds memory and, more
+// importantly, makes progress durable: a timeout/crash mid-run can cost at most
+// the last unflushed batch instead of the entire scrape.
+const FLUSH_EVERY_PAGES = 50;
+
+// All inserts/queries are chunked. A single statement with thousands of rows
+// overflows the call stack and the Postgres bind-parameter limit. Batches of 500
+// stay well under both.
+const CHUNK = 500;
+function chunk<T>(arr: T[], n: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
 
 function parseCliArgs() {
   // pnpm's nested `scrape -> start` scripts forward a stray `--` separator into
@@ -30,26 +48,12 @@ function parseCliArgs() {
   return { pages, maxPrice };
 }
 
-async function main() {
-  const { pages, maxPrice } = parseCliArgs();
-  console.log(
-    `[run] scraping standvirtual: pages=${pages}` +
-      (maxPrice !== undefined ? ` maxPrice=${maxPrice}` : ""),
-  );
-
-  const scraped = await scrape({ pages, maxPrice });
-  console.log(`[run] parsed ${scraped.length} unique listings`);
-
-  // Fail loudly so CI flags a broken selector / a block, instead of silently
-  // writing nothing and looking "green".
-  if (scraped.length === 0) {
-    throw new Error("No listings parsed — likely a selector change or a block. Failing the run.");
-  }
-
-  const db = getDb();
-  await seedRegions(db);
-  const resolveRegion = await buildRegionResolver(db);
-
+/** Upsert one batch of listings and append price snapshots where the price changed. */
+async function ingest(
+  db: Db,
+  scraped: ParsedListing[],
+  resolveRegion: RegionResolver,
+): Promise<{ upserted: number; snapshots: number }> {
   const values = scraped.map((r) => ({
     externalId: r.externalId,
     title: r.title,
@@ -65,16 +69,6 @@ async function main() {
     currency: r.currency,
     currentPrice: r.price,
   }));
-
-  // All inserts/queries below are chunked. A single statement with thousands of
-  // rows (a deep backfill parses ~9k listings) overflows the call stack and the
-  // Postgres bind-parameter limit. Batches of 500 stay well under both.
-  const CHUNK = 500;
-  const chunk = <T>(arr: T[], n: number): T[][] => {
-    const out: T[][] = [];
-    for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
-    return out;
-  };
 
   // Upsert current state. On conflict, refresh mutable fields + last_seen_at.
   const upserted: { id: number; currentPrice: number | null }[] = [];
@@ -130,6 +124,58 @@ async function main() {
     await db.insert(priceHistory).values(batch);
   }
 
+  return { upserted: upserted.length, snapshots: newPriceRows.length };
+}
+
+async function main() {
+  const { pages, maxPrice } = parseCliArgs();
+  console.log(
+    `[run] scraping standvirtual: pages=${pages}` +
+      (maxPrice !== undefined ? ` maxPrice=${maxPrice}` : ""),
+  );
+
+  const db = getDb();
+  await seedRegions(db);
+  const resolveRegion = await buildRegionResolver(db);
+
+  // Stream-ingest: scrape() hands us a batch every FLUSH_EVERY_PAGES pages (and a
+  // final partial batch at the end). We dedupe globally across batches — pagination
+  // drift can surface the same listing on two pages — so each listing is ingested
+  // once. Already-flushed batches are durable if a later page fails.
+  const seen = new Set<string>();
+  let totalUpserted = 0;
+  let totalSnapshots = 0;
+
+  await scrape({
+    pages,
+    maxPrice,
+    flushEvery: FLUSH_EVERY_PAGES,
+    onFlush: async (records) => {
+      // Dedupe both across prior flushes AND within this batch — pagination drift
+      // can surface one listing twice, and a single upsert statement can't touch
+      // the same conflict target twice. Mutating `seen` mid-filter covers both.
+      const fresh = records.filter((r) => {
+        if (seen.has(r.externalId)) return false;
+        seen.add(r.externalId);
+        return true;
+      });
+      if (fresh.length === 0) return;
+      const res = await ingest(db, fresh, resolveRegion);
+      totalUpserted += res.upserted;
+      totalSnapshots += res.snapshots;
+      console.log(
+        `[run] flushed +${fresh.length} — running totals: ${seen.size} parsed, ` +
+          `${totalUpserted} upserted, ${totalSnapshots} snapshots`,
+      );
+    },
+  });
+
+  // Fail loudly so CI flags a broken selector / a block, instead of silently
+  // writing nothing and looking "green".
+  if (seen.size === 0) {
+    throw new Error("No listings parsed — likely a selector change or a block. Failing the run.");
+  }
+
   // Sold/removed detection. After a full-catalog scrape, any still-active listing
   // we haven't seen in 2+ days is gone (sold or delisted) — mark it inactive.
   // Two guards prevent false positives:
@@ -138,7 +184,7 @@ async function main() {
   //   2. The 2-day grace window tolerates an occasional blocked daily run.
   const FULL_SCRAPE_MIN = 20_000;
   let deactivated = 0;
-  if (scraped.length >= FULL_SCRAPE_MIN) {
+  if (seen.size >= FULL_SCRAPE_MIN) {
     const rows = await db
       .update(listings)
       .set({ isActive: false })
@@ -147,13 +193,13 @@ async function main() {
     deactivated = rows.length;
   } else {
     console.log(
-      `[run] partial scrape (${scraped.length} < ${FULL_SCRAPE_MIN}) — skipping sold/removed detection`,
+      `[run] partial scrape (${seen.size} < ${FULL_SCRAPE_MIN}) — skipping sold/removed detection`,
     );
   }
 
   console.log(
-    `[run] done: ${upserted.length} listings upserted, ` +
-      `${newPriceRows.length} price snapshots recorded, ` +
+    `[run] done: ${totalUpserted} listings upserted, ` +
+      `${totalSnapshots} price snapshots recorded, ` +
       `${deactivated} marked inactive (sold/removed)`,
   );
 }

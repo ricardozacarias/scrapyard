@@ -253,13 +253,36 @@ export interface ScrapeOptions {
   maxPrice?: number;
   pages: number;
   politeDelayMs?: [number, number];
+  /** Flush accumulated listings via onFlush every N pages (and once at the end). */
+  flushEvery?: number;
+  /**
+   * Called with the listings scraped since the last flush. When provided, scrape()
+   * streams batches to the caller (durable mid-run ingestion) instead of buffering
+   * everything; it returns an empty array. When omitted, scrape() buffers and
+   * returns the full de-duped list as before.
+   */
+  onFlush?: (records: ParsedListing[]) => Promise<void>;
 }
 
-/** Fetch N pages and return parsed, de-duped listings. */
+/**
+ * Fetch up to N pages. Without onFlush, returns the full de-duped list. With
+ * onFlush, streams batches every `flushEvery` pages (+ a final partial batch) and
+ * returns an empty array, so a deep run never holds the whole catalog in memory
+ * and already-flushed pages survive a later failure.
+ */
 export async function scrape(opts: ScrapeOptions): Promise<ParsedListing[]> {
-  const { maxPrice, pages } = opts;
+  const { maxPrice, pages, flushEvery, onFlush } = opts;
   const [lo, hi] = opts.politeDelayMs ?? [1000, 4000];
   const all: ParsedListing[] = [];
+  let buffer: ParsedListing[] = [];
+
+  const flush = async () => {
+    if (onFlush && buffer.length > 0) {
+      const batch = buffer;
+      buffer = [];
+      await onFlush(batch);
+    }
+  };
 
   for (let page = 1; page <= pages; page++) {
     let recs = parsePage(await fetchHtml(maxPrice, page));
@@ -275,9 +298,16 @@ export async function scrape(opts: ScrapeOptions): Promise<ParsedListing[]> {
 
     console.log(`[scrape] page ${page}/${pages}: ${recs.length} listings`);
     if (recs.length === 0) break; // still empty after retries → past the last page
-    all.push(...recs);
+
+    if (onFlush) {
+      buffer.push(...recs);
+      if (flushEvery && page % flushEvery === 0) await flush();
+    } else {
+      all.push(...recs);
+    }
     if (page < pages) await sleep(lo + Math.random() * (hi - lo));
   }
 
-  return dedupe(all);
+  await flush(); // emit any remaining buffered listings
+  return dedupe(all); // empty when streaming via onFlush
 }

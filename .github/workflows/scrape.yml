@@ -24,9 +24,10 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    # A full-catalog scrape is ~80 min (1,340 pages, politely spaced); 120 leaves
-    # buffer for retries. Well under GitHub's 6h job ceiling.
-    timeout-minutes: 120
+    # A full-catalog scrape is ~100 min (1,340 pages, politely spaced). 180 leaves
+    # generous headroom for retries / catalog growth, well under GitHub's 6h cap.
+    # Ingestion is flushed every 50 pages, so a timeout loses at most one batch.
+    timeout-minutes: 180
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
