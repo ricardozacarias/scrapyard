@@ -18,7 +18,11 @@ export interface ParsedListing {
   mileageKm: number | null;
 }
 
-const ID_RE = /ID([^./]+)\.html/i;
+// Real listing IDs are an uppercase "ID" prefix + alphanumerics, e.g. ID8Q0vzr.
+// Must be case-SENSITIVE and alphanumeric-only: a case-insensitive /id/ would
+// match the "id" inside slug words ("hybrid", "tids", "vw-id-3") and capture
+// junk, corrupting externalId (our dedupe key).
+const ID_RE = /ID([A-Za-z0-9]+)\.html/;
 const INT_RE = /\d[\d .]*/;
 
 // Multiword brand prefixes so "Alfa Romeo Giulia" -> "Alfa Romeo", not "Alfa".
@@ -258,10 +262,19 @@ export async function scrape(opts: ScrapeOptions): Promise<ParsedListing[]> {
   const all: ParsedListing[] = [];
 
   for (let page = 1; page <= pages; page++) {
-    const html = await fetchHtml(maxPrice, page);
-    const recs = parsePage(html);
+    let recs = parsePage(await fetchHtml(maxPrice, page));
+
+    // A 200-OK anti-bot interstitial parses to 0 listings just like the genuine
+    // end of results. Distinguish them by re-fetching: a transient block clears,
+    // the true end stays empty. Without this, one hiccup truncates a deep run.
+    for (let retry = 0; recs.length === 0 && retry < 2; retry++) {
+      console.warn(`[scrape] page ${page}: 0 parsed; re-fetching (${retry + 1}/2)`);
+      await sleep(2000 + Math.random() * 2000);
+      recs = parsePage(await fetchHtml(maxPrice, page));
+    }
+
     console.log(`[scrape] page ${page}/${pages}: ${recs.length} listings`);
-    if (recs.length === 0) break; // ran past the last results page
+    if (recs.length === 0) break; // still empty after retries → past the last page
     all.push(...recs);
     if (page < pages) await sleep(lo + Math.random() * (hi - lo));
   }
