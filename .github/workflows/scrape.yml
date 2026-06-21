@@ -3,13 +3,15 @@ name: Scrape standvirtual
 on:
   schedule:
     # Daily at 05:30 UTC (06:30/07:30 Lisbon depending on DST).
+    # Scrapes the FULL catalog (~1,340 pages); the scraper self-terminates at the
+    # true end, so the high page cap just leaves headroom for catalog growth.
     - cron: "30 5 * * *"
   workflow_dispatch:
     inputs:
       pages:
-        description: "Number of search-result pages to scrape"
+        description: "Pages to scrape (full catalog ~1340; type a small number to test)"
         required: false
-        default: "10"
+        default: "1500"
       max_price:
         description: "Optional max price filter (EUR)"
         required: false
@@ -22,7 +24,9 @@ concurrency:
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # A full-catalog scrape is ~80 min (1,340 pages, politely spaced); 120 leaves
+    # buffer for retries. Well under GitHub's 6h job ceiling.
+    timeout-minutes: 120
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
     steps:
@@ -45,7 +49,7 @@ jobs:
 
       - name: Run scraper
         run: |
-          PAGES="${{ github.event.inputs.pages || '10' }}"
+          PAGES="${{ github.event.inputs.pages || '1500' }}"
           MAXP="${{ github.event.inputs.max_price }}"
           if [ -n "$MAXP" ]; then
             pnpm scrape -- --pages "$PAGES" --max-price "$MAXP"

@@ -130,9 +130,31 @@ async function main() {
     await db.insert(priceHistory).values(batch);
   }
 
+  // Sold/removed detection. After a full-catalog scrape, any still-active listing
+  // we haven't seen in 2+ days is gone (sold or delisted) — mark it inactive.
+  // Two guards prevent false positives:
+  //   1. Only run after a comprehensive scrape (a small/test/partial run must not
+  //      deactivate the whole catalog just because it only refreshed a few pages).
+  //   2. The 2-day grace window tolerates an occasional blocked daily run.
+  const FULL_SCRAPE_MIN = 20_000;
+  let deactivated = 0;
+  if (scraped.length >= FULL_SCRAPE_MIN) {
+    const rows = await db
+      .update(listings)
+      .set({ isActive: false })
+      .where(sql`${listings.isActive} = true and ${listings.lastSeenAt} < now() - interval '2 days'`)
+      .returning({ id: listings.id });
+    deactivated = rows.length;
+  } else {
+    console.log(
+      `[run] partial scrape (${scraped.length} < ${FULL_SCRAPE_MIN}) — skipping sold/removed detection`,
+    );
+  }
+
   console.log(
     `[run] done: ${upserted.length} listings upserted, ` +
-      `${newPriceRows.length} price snapshots recorded`,
+      `${newPriceRows.length} price snapshots recorded, ` +
+      `${deactivated} marked inactive (sold/removed)`,
   );
 }
 
