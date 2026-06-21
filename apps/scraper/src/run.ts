@@ -66,53 +66,68 @@ async function main() {
     currentPrice: r.price,
   }));
 
-  // Upsert current state. On conflict, refresh mutable fields + last_seen_at.
-  const upserted = await db
-    .insert(listings)
-    .values(values)
-    .onConflictDoUpdate({
-      target: listings.externalId,
-      set: {
-        title: sql`excluded.title`,
-        url: sql`excluded.url`,
-        city: sql`excluded.city`,
-        region: sql`excluded.region`,
-        regionId: sql`excluded.region_id`,
-        sellerType: sql`excluded.seller_type`,
-        brand: sql`excluded.brand`,
-        fuel: sql`excluded.fuel`,
-        modelYear: sql`excluded.model_year`,
-        mileageKm: sql`excluded.mileage_km`,
-        currency: sql`excluded.currency`,
-        currentPrice: sql`excluded.current_price`,
-        lastSeenAt: sql`now()`,
-        isActive: sql`true`,
-      },
-    })
-    .returning({ id: listings.id, currentPrice: listings.currentPrice });
+  // All inserts/queries below are chunked. A single statement with thousands of
+  // rows (a deep backfill parses ~9k listings) overflows the call stack and the
+  // Postgres bind-parameter limit. Batches of 500 stay well under both.
+  const CHUNK = 500;
+  const chunk = <T>(arr: T[], n: number): T[][] => {
+    const out: T[][] = [];
+    for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+    return out;
+  };
 
-  const ids = upserted.map((u) => u.id);
+  // Upsert current state. On conflict, refresh mutable fields + last_seen_at.
+  const upserted: { id: number; currentPrice: number | null }[] = [];
+  for (const batch of chunk(values, CHUNK)) {
+    const rows = await db
+      .insert(listings)
+      .values(batch)
+      .onConflictDoUpdate({
+        target: listings.externalId,
+        set: {
+          title: sql`excluded.title`,
+          url: sql`excluded.url`,
+          city: sql`excluded.city`,
+          region: sql`excluded.region`,
+          regionId: sql`excluded.region_id`,
+          sellerType: sql`excluded.seller_type`,
+          brand: sql`excluded.brand`,
+          fuel: sql`excluded.fuel`,
+          modelYear: sql`excluded.model_year`,
+          mileageKm: sql`excluded.mileage_km`,
+          currency: sql`excluded.currency`,
+          currentPrice: sql`excluded.current_price`,
+          lastSeenAt: sql`now()`,
+          isActive: sql`true`,
+        },
+      })
+      .returning({ id: listings.id, currentPrice: listings.currentPrice });
+    upserted.push(...rows);
+  }
 
   // Latest recorded price per scraped listing (one row each via DISTINCT ON).
-  const latestRows =
-    ids.length > 0
-      ? await db
-          .selectDistinctOn([priceHistory.listingId], {
-            listingId: priceHistory.listingId,
-            price: priceHistory.price,
-          })
-          .from(priceHistory)
-          .where(inArray(priceHistory.listingId, ids))
-          .orderBy(priceHistory.listingId, desc(priceHistory.observedAt))
-      : [];
-  const latestById = new Map(latestRows.map((r) => [r.listingId, r.price]));
+  const latestById = new Map<number, number>();
+  for (const idBatch of chunk(
+    upserted.map((u) => u.id),
+    CHUNK,
+  )) {
+    const latestRows = await db
+      .selectDistinctOn([priceHistory.listingId], {
+        listingId: priceHistory.listingId,
+        price: priceHistory.price,
+      })
+      .from(priceHistory)
+      .where(inArray(priceHistory.listingId, idBatch))
+      .orderBy(priceHistory.listingId, desc(priceHistory.observedAt));
+    for (const r of latestRows) latestById.set(r.listingId, r.price);
+  }
 
   // Append a snapshot only where the price is new or has changed.
   const newPriceRows = upserted
     .filter((u) => u.currentPrice !== null && latestById.get(u.id) !== u.currentPrice)
     .map((u) => ({ listingId: u.id, price: u.currentPrice as number }));
-  if (newPriceRows.length > 0) {
-    await db.insert(priceHistory).values(newPriceRows);
+  for (const batch of chunk(newPriceRows, CHUNK)) {
+    await db.insert(priceHistory).values(batch);
   }
 
   console.log(
