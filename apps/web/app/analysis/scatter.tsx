@@ -12,20 +12,23 @@ import {
 } from "@/lib/stats";
 
 // De-identified on purpose: no ad title or url. The public scatter shows the
-// distribution (brand + numerics), not links back to individual listings.
+// distribution (make/model + numerics), not links back to individual listings.
 export interface ScatterPoint {
-  brand: string | null;
+  make: string | null;
+  model: string | null;
   price: number | null;
   mileageKm: number | null;
   modelYear: number | null;
+  enginePower: number | null;
 }
 
-type FieldKey = "price" | "mileageKm" | "modelYear";
+type FieldKey = "price" | "mileageKm" | "modelYear" | "enginePower";
 
 const FIELDS: { key: FieldKey; label: string }[] = [
   { key: "price", label: "Price (€)" },
   { key: "mileageKm", label: "Mileage (km)" },
   { key: "modelYear", label: "Model year" },
+  { key: "enginePower", label: "Power (cv)" },
 ];
 
 export default function Scatter({ data }: { data: ScatterPoint[] }) {
@@ -71,7 +74,7 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
       x: p.d[xKey] as number,
       y: p.d[yKey] as number,
       outlier: p.outlier,
-      label: `${p.d.brand ?? "(unknown brand)"}\n${FIELDS.find((f) => f.key === xKey)?.label}: ${formatNumber(p.d[xKey] as number)}\n${FIELDS.find((f) => f.key === yKey)?.label}: ${formatNumber(p.d[yKey] as number)}`,
+      label: `${[p.d.make, p.d.model].filter(Boolean).join(" ") || "(unknown)"}\n${FIELDS.find((f) => f.key === xKey)?.label}: ${formatNumber(p.d[xKey] as number)}\n${FIELDS.find((f) => f.key === yKey)?.label}: ${formatNumber(p.d[yKey] as number)}`,
     }));
     const normal = rows.filter((r) => !r.outlier);
     const outliers = rows.filter((r) => r.outlier);
@@ -188,7 +191,7 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
           <>
             {points.length.toLocaleString("pt-PT")} points · y = {regression.slope.toFixed(4)}·x +{" "}
             {regression.intercept.toFixed(0)} · R² = {regression.r2.toFixed(3)} · {outlierCount}{" "}
-            outliers (red). Hover a point for its brand and values.
+            outliers (red). Hover a point for its make/model and values.
           </>
         ) : (
           "Not enough variance to fit a regression with the current axes."

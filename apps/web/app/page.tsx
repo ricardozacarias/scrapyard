@@ -7,9 +7,16 @@ import { getBiggestPriceDrops, getSummary } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
+/** Compact initials for brands without a clean monochrome glyph. */
+function initials(label: string): string {
+  const words = label.split(/[\s-]+/).filter(Boolean);
+  if (words.length >= 2) return (words[0]![0]! + words[1]![0]!).toUpperCase();
+  return label.replace(/[^A-Za-z0-9]/g, "").slice(0, 3).toUpperCase();
+}
+
 export default async function DashboardPage() {
   const [summary, movers] = await Promise.all([getSummary(), getBiggestPriceDrops(8)]);
-  const maxBrand = Math.max(1, ...summary.byBrand.map((b) => b.count));
+  const maxBrand = Math.max(1, ...summary.byMake.map((b) => b.count));
   const maxRegion = Math.max(1, ...summary.byRegion.map((r) => r.count));
 
   return (
@@ -22,14 +29,15 @@ export default async function DashboardPage() {
           <Gauge
             value={summary.medianPrice}
             max={50000}
-            display={formatPrice(summary.medianPrice)}
+            display={formatNumber(summary.medianPrice)}
+            unit="€"
             label="median asking price"
-            minLabel="€0"
-            maxLabel="€50k"
+            tip="Median asking price across all currently listed cars — half are priced above this, half below."
+            numerals={["0", "10k", "20k", "30k", "40k", "50k"]}
             zones={[
-              { upTo: 15000, color: "var(--green)" },
-              { upTo: 30000, color: "var(--orange)" },
-              { upTo: 50000, color: "var(--red)" },
+              { upTo: 15000, color: "var(--gauge-low)" },
+              { upTo: 30000, color: "var(--gauge-mid)" },
+              { upTo: 50000, color: "var(--gauge-high)" },
             ]}
           />
         </div>
@@ -37,14 +45,15 @@ export default async function DashboardPage() {
           <Gauge
             value={summary.marketHeat}
             max={2}
-            display={`${Math.round(summary.marketHeat * 100)}%`}
+            display={`${Math.round(summary.marketHeat * 100)}`}
+            unit="%"
             label="market heat · 24h vs avg"
-            minLabel="cold"
-            maxLabel="hot"
+            tip="New listings in the last 24h versus the daily average. 100% is a normal day; higher means an unusually busy market."
+            numerals={["0", "40%", "80%", "120%", "160%", "200%"]}
             zones={[
-              { upTo: 0.8, color: "var(--green)" },
-              { upTo: 1.3, color: "var(--orange)" },
-              { upTo: 2, color: "var(--red)" },
+              { upTo: 0.8, color: "var(--gauge-low)" },
+              { upTo: 1.3, color: "var(--gauge-mid)" },
+              { upTo: 2, color: "var(--gauge-high)" },
             ]}
           />
         </div>
@@ -52,14 +61,15 @@ export default async function DashboardPage() {
           <Gauge
             value={summary.medianMileage}
             max={300000}
-            display={`${formatNumber(summary.medianMileage)} km`}
+            display={formatNumber(summary.medianMileage)}
+            unit="km"
             label="median mileage"
-            minLabel="0"
-            maxLabel="300k"
+            tip="Median odometer reading across listings — half the cars have driven more than this, half less."
+            numerals={["0", "60k", "120k", "180k", "240k", "300k"]}
             zones={[
-              { upTo: 100000, color: "var(--green)" },
-              { upTo: 200000, color: "var(--orange)" },
-              { upTo: 300000, color: "var(--red)" },
+              { upTo: 100000, color: "var(--gauge-low)" },
+              { upTo: 200000, color: "var(--gauge-mid)" },
+              { upTo: 300000, color: "var(--gauge-high)" },
             ]}
           />
         </div>
@@ -86,27 +96,24 @@ export default async function DashboardPage() {
 
       <div className="grid-2">
         <div className="panel">
-          <h2>By brand · median &amp; volume</h2>
-          {summary.byBrand.length === 0 ? (
+          <h2>By make · median &amp; volume</h2>
+          {summary.byMake.length === 0 ? (
             <p className="muted">No data yet. Run the scraper to populate the database.</p>
           ) : (
             <div className="barlist">
-              {summary.byBrand.map((b) => {
+              {summary.byMake.map((b) => {
                 const mark = brandMark(b.label);
                 return (
                 <div className="barrow" key={b.label}>
-                  <span className="brand-id">
-                    {mark && mark.mono ? (
-                      <>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img className="brand-logo-mono" src={mark.logo} alt="" aria-hidden="true" />
-                        <span className="bar-label">{b.label}</span>
-                      </>
-                    ) : (
-                      // No clean glyph — show the name itself as a white wordmark.
-                      <span className="brand-wordmark">{b.label}</span>
-                    )}
-                  </span>
+                  {mark && mark.mono ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img className="brand-logo-mono" src={mark.logo} alt="" aria-hidden="true" />
+                  ) : (
+                    <span className="brand-chip" aria-hidden="true">
+                      {initials(b.label)}
+                    </span>
+                  )}
+                  <span className="bar-label">{b.label}</span>
                   <span className="bar">
                     <span className="bar-fill" style={{ width: `${(b.count / maxBrand) * 100}%` }} />
                   </span>

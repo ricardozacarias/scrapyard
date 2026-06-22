@@ -26,7 +26,7 @@ async function main() {
 
   const rows = await db
     .select({
-      brand: listings.brand,
+      make: listings.make,
       count: count(),
       avgPrice: sql<number>`round(${avg(listings.currentPrice)})`,
       minPrice: min(listings.currentPrice),
@@ -34,12 +34,12 @@ async function main() {
     })
     .from(listings)
     .where(eq(listings.isActive, true))
-    .groupBy(listings.brand)
+    .groupBy(listings.make)
     .having(sql`count(*) >= 20`)
     .orderBy(desc(count()));
 
   printTable(rows);
-  save("price-by-brand", rows);
+  save("price-by-make", rows);
 }
 
 main().then(

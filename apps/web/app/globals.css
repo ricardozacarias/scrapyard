@@ -13,7 +13,14 @@
   --orange: #ff6a13;
   --red: #ff3340;
   --danger: var(--red);
+  /* Gauge dial ramp — a softer, less clashing automotive green→amber→red than
+     the semantic ramp above, kept separate so badges/indicators are unaffected. */
+  --gauge-low: #37c46b;
+  --gauge-mid: #f5a623;
+  --gauge-high: #ff3b3b;
+  --gauge-face: #121212; /* recessed instrument face */
   --radius: 10px;
+  --nav-h: 53px; /* height of the global sticky top nav */
 }
 
 * {
@@ -235,25 +242,103 @@ select {
   align-items: center;
   justify-content: center;
 }
-.gauge {
+.gauge-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   width: 100%;
   max-width: 300px;
+}
+.gauge {
+  width: 100%;
 }
 .gauge-value {
   fill: var(--text);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 700;
 }
-.gauge-label {
+.gauge-unit {
   fill: var(--muted);
-  font-size: 9px;
-  letter-spacing: 0.04em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  font-weight: 600;
 }
-.gauge-tick {
+.gauge-num {
   fill: var(--muted);
-  font-size: 8px;
+  font-size: 7.5px;
   font-family: ui-monospace, monospace;
+}
+.gauge-caption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.gauge-title {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.gauge-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1px solid var(--muted);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+}
+.gauge-info:hover,
+.gauge-info:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+  outline: none;
+}
+.gauge-tip {
+  position: absolute;
+  bottom: 160%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 190px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+  z-index: 20;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.gauge-tip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--border);
+}
+.gauge-info:hover .gauge-tip,
+.gauge-info:focus-visible .gauge-tip {
+  opacity: 1;
+  visibility: visible;
 }
 
 .tiles {
@@ -317,6 +402,97 @@ select {
   }
 }
 
+/* ---- sectioned report (analysis) ---- */
+.analysis-layout {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+.section-nav {
+  position: sticky;
+  top: calc(var(--nav-h) + 20px);
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.section-nav .eyebrow {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 8px;
+  padding-left: 11px;
+}
+.section-nav a {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 11px;
+  border-radius: 7px;
+  border-left: 2px solid transparent;
+}
+.section-nav a:hover {
+  color: var(--text);
+  background: var(--panel);
+  text-decoration: none;
+}
+.section-nav a.active {
+  color: var(--text);
+  border-left-color: var(--accent);
+  background: var(--panel);
+}
+.analysis-sections {
+  display: flex;
+  flex-direction: column;
+}
+.report-section {
+  scroll-margin-top: calc(var(--nav-h) + 20px);
+}
+.report-section + .report-section {
+  margin-top: 40px;
+}
+.section-head {
+  margin-bottom: 14px;
+}
+.section-head .kicker {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+}
+.section-head h2 {
+  font-size: 20px;
+  margin: 4px 0 6px;
+}
+.section-head .takeaway {
+  color: var(--muted);
+  font-size: 14px;
+  margin: 0;
+  max-width: 70ch;
+}
+.report-section .panel {
+  margin-top: 0;
+}
+
+@media (max-width: 860px) {
+  .analysis-layout {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .section-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .section-nav .eyebrow {
+    display: none;
+  }
+}
+
 /* ---- bar lists (brand / district) ---- */
 .barlist {
   display: flex;
@@ -328,20 +504,21 @@ select {
   align-items: center;
   gap: 10px;
 }
-/* Fixed-width identity column so bars stay aligned whether a row shows a
-   glyph + label or just a name-wordmark. */
-.brand-id {
+/* Fallback chip: white initials for brands without a clean monochrome glyph. */
+.brand-chip {
   flex: none;
-  width: 128px;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
   display: flex;
   align-items: center;
-  gap: 8px;
-  overflow: hidden;
-}
-.brand-id .bar-label {
-  width: auto;
-  flex: 1;
-  min-width: 0;
+  justify-content: center;
 }
 .brand-logo-mono {
   flex: none;
@@ -360,19 +537,6 @@ select {
 .brand-logo-mono.sm {
   width: 18px;
   height: 18px;
-}
-/* Fallback for filled-emblem / logo-less brands: the name in white. */
-.brand-wordmark {
-  flex: 1;
-  min-width: 0;
-  color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .bar-label {
   width: 92px;

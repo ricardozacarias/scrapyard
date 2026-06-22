@@ -12,10 +12,17 @@ export interface ParsedListing {
   sellerType: string | null;
   price: number | null;
   currency: string | null;
-  brand: string | null;
+  make: string | null;
+  model: string | null;
+  version: string | null;
   fuel: string | null;
   modelYear: number | null;
   mileageKm: number | null;
+  gearbox: string | null;
+  origin: string | null;
+  enginePower: number | null;
+  engineCapacity: number | null;
+  priceEvaluation: string | null;
 }
 
 // Real listing IDs are an uppercase "ID" prefix + alphanumerics, e.g. ID8Q0vzr.
@@ -194,7 +201,125 @@ function extractBrandFromTitle(title: string | null): string | null {
   return title.split(/\s+/)[0] ?? null;
 }
 
-export function parsePage(html: string): ParsedListing[] {
+/**
+ * Map standvirtual's seller __typename to our two-value sellerType.
+ * "PrivateSeller" → Particular; any business/dealer type → Profissional.
+ */
+function sellerTypeOf(typename: unknown): string | null {
+  if (typeof typename !== "string") return null;
+  return /private/i.test(typename) ? "Particular" : "Profissional";
+}
+
+/** Normalize a priceEvaluation indicator; "NONE"/empty → null. */
+function evaluationOf(indicator: unknown): string | null {
+  if (typeof indicator !== "string" || !indicator || indicator === "NONE") return null;
+  return indicator; // "BELOW" | "IN" | "ABOVE" | ...
+}
+
+/**
+ * Primary parser: standvirtual is a Next.js app that ships every listing's
+ * canonical structured data (make, model, version, engine, price, location,
+ * seller, price-evaluation) in the `__NEXT_DATA__` hydration blob. This is
+ * far richer and more stable than scraping the rendered card DOM, so it's the
+ * source of truth. Returns null if the blob is absent/unparseable so the caller
+ * can fall back to the cheerio DOM parser.
+ *
+ * The advert list lives inside a stringified Apollo payload nested in
+ * __NEXT_DATA__, so it needs a second JSON.parse.
+ */
+export function parseNextData(html: string): ParsedListing[] | null {
+  const tag = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
+  if (!tag?.[1]) return null;
+
+  let root: unknown;
+  try {
+    root = JSON.parse(tag[1]);
+  } catch {
+    return null;
+  }
+
+  // The advert search result is a JSON string embedded as a value somewhere in
+  // the tree — find the one that holds the AdvertSearchOutput payload.
+  let payload: string | null = null;
+  const findPayload = (o: unknown): void => {
+    if (payload !== null) return;
+    if (typeof o === "string") {
+      if (o.includes("AdvertSearchOutput")) payload = o;
+    } else if (o && typeof o === "object") {
+      for (const v of Object.values(o)) findPayload(v);
+    }
+  };
+  findPayload(root);
+  if (payload === null) return null;
+
+  let edges: unknown;
+  try {
+    edges = (JSON.parse(payload) as { advertSearch?: { edges?: unknown } }).advertSearch?.edges;
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(edges)) return null;
+
+  const out: ParsedListing[] = [];
+  for (const edge of edges) {
+    const ad = (edge as { node?: Record<string, unknown> } | null)?.node;
+    if (!ad) continue;
+
+    const url = typeof ad.url === "string" ? ad.url : null;
+    const externalId = url ? (ID_RE.exec(url)?.[1] ?? null) : null;
+    if (!url || !externalId) continue;
+
+    // parameters[] = [{ key, displayValue, value }, ...]
+    const params = new Map<string, string | null>();
+    for (const p of (ad.parameters as { key: string; displayValue?: string }[] | undefined) ?? []) {
+      if (p?.key) params.set(p.key, p.displayValue ?? null);
+    }
+    const pInt = (key: string): number | null => {
+      const d = params.get(key);
+      const m = d ? INT_RE.exec(d) : null;
+      return m ? toInt(m[0]) : null;
+    };
+
+    const amount = (ad.price as { amount?: { units?: unknown; currencyCode?: unknown } } | undefined)
+      ?.amount;
+    const location = ad.location as
+      | { city?: { name?: unknown }; region?: { name?: unknown } }
+      | undefined;
+
+    out.push({
+      externalId,
+      title: typeof ad.title === "string" ? ad.title : null,
+      url,
+      city: typeof location?.city?.name === "string" ? location.city.name : null,
+      region: typeof location?.region?.name === "string" ? location.region.name : null,
+      sellerType: sellerTypeOf((ad.seller as { __typename?: unknown } | undefined)?.__typename),
+      price: typeof amount?.units === "number" ? amount.units : null,
+      currency: typeof amount?.currencyCode === "string" ? amount.currencyCode : null,
+      make: params.get("make") ?? null,
+      model: params.get("model") ?? null,
+      version: params.get("version") ?? null,
+      fuel: params.get("fuel_type") ?? null,
+      modelYear: pInt("first_registration_year"),
+      mileageKm: pInt("mileage"),
+      gearbox: params.get("gearbox") ?? null,
+      origin: params.get("origin") ?? null,
+      enginePower: pInt("engine_power"),
+      engineCapacity: pInt("engine_capacity"),
+      priceEvaluation: evaluationOf(
+        (ad.priceEvaluation as { indicator?: unknown } | undefined)?.indicator,
+      ),
+    });
+  }
+  return out.length ? out : null;
+}
+
+/**
+ * Fallback parser: scrape the rendered card DOM. Used only if `__NEXT_DATA__` is
+ * missing/unparseable. Lacks the structured fields (make is guessed from the
+ * title; model/version/engine/evaluation are null) — degraded but not empty, so
+ * a hydration-format change doesn't zero out a run.
+ */
+export function parsePageCheerio(html: string): ParsedListing[] {
   const $ = load(html);
   const cards = findResultCards($);
   const out: ParsedListing[] = [];
@@ -216,8 +341,6 @@ export function parsePage(html: string): ParsedListing[] {
     const fuel = params.fuel_type
       ? params.fuel_type.charAt(0).toUpperCase() + params.fuel_type.slice(1).toLowerCase()
       : null;
-    const modelYear = toInt(params.first_registration_year);
-    const brand = extractBrandFromTitle(title);
 
     out.push({
       externalId,
@@ -228,13 +351,25 @@ export function parsePage(html: string): ParsedListing[] {
       sellerType,
       price,
       currency,
-      brand,
+      make: extractBrandFromTitle(title),
+      model: null,
+      version: null,
       fuel,
-      modelYear,
+      modelYear: toInt(params.first_registration_year),
       mileageKm,
+      gearbox: params.gearbox ?? null,
+      origin: null,
+      enginePower: null,
+      engineCapacity: null,
+      priceEvaluation: null,
     });
   }
   return out;
+}
+
+/** Parse a search-results page: structured __NEXT_DATA__ first, DOM as fallback. */
+export function parsePage(html: string): ParsedListing[] {
+  return parseNextData(html) ?? parsePageCheerio(html);
 }
 
 /** De-dupe by externalId, keeping first occurrence. */

@@ -16,7 +16,8 @@ import {
 } from "@scrapyard/db";
 
 export interface ListingFilters {
-  brand?: string;
+  make?: string;
+  model?: string;
   fuel?: string;
   sellerType?: string;
   region?: string; // canonical district name
@@ -31,14 +32,14 @@ export interface ListingFilters {
   pageSize?: number;
 }
 
-export type SortKey = "price" | "year" | "mileage" | "lastSeen" | "brand";
+export type SortKey = "price" | "year" | "mileage" | "lastSeen" | "make";
 
 const SORT_COLUMNS = {
   price: listings.currentPrice,
   year: listings.modelYear,
   mileage: listings.mileageKm,
   lastSeen: listings.lastSeenAt,
-  brand: listings.brand,
+  make: listings.make,
 } as const;
 
 export interface ListingRow {
@@ -49,10 +50,17 @@ export interface ListingRow {
   city: string | null;
   district: string | null;
   sellerType: string | null;
-  brand: string | null;
+  make: string | null;
+  model: string | null;
+  version: string | null;
   fuel: string | null;
   modelYear: number | null;
   mileageKm: number | null;
+  gearbox: string | null;
+  origin: string | null;
+  enginePower: number | null;
+  engineCapacity: number | null;
+  priceEvaluation: string | null;
   currency: string | null;
   currentPrice: number | null;
   firstSeenAt: Date;
@@ -70,7 +78,8 @@ const continental = (): SQL =>
 
 function buildWhere(f: ListingFilters): SQL | undefined {
   const conds: SQL[] = [continental()];
-  if (f.brand) conds.push(eq(listings.brand, f.brand));
+  if (f.make) conds.push(eq(listings.make, f.make));
+  if (f.model) conds.push(eq(listings.model, f.model));
   if (f.fuel) conds.push(eq(listings.fuel, f.fuel));
   if (f.sellerType) conds.push(eq(listings.sellerType, f.sellerType));
   if (f.region) conds.push(eq(regions.name, f.region));
@@ -104,10 +113,17 @@ export async function getListings(f: ListingFilters): Promise<{
       city: listings.city,
       district: regions.name,
       sellerType: listings.sellerType,
-      brand: listings.brand,
+      make: listings.make,
+      model: listings.model,
+      version: listings.version,
       fuel: listings.fuel,
       modelYear: listings.modelYear,
       mileageKm: listings.mileageKm,
+      gearbox: listings.gearbox,
+      origin: listings.origin,
+      enginePower: listings.enginePower,
+      engineCapacity: listings.engineCapacity,
+      priceEvaluation: listings.priceEvaluation,
       currency: listings.currency,
       currentPrice: listings.currentPrice,
       firstSeenAt: listings.firstSeenAt,
@@ -131,7 +147,7 @@ export async function getListings(f: ListingFilters): Promise<{
 }
 
 export interface FilterOptions {
-  brands: string[];
+  makes: string[];
   fuels: string[];
   sellerTypes: string[];
   regions: string[];
@@ -154,13 +170,13 @@ export async function getFilterOptions(): Promise<FilterOptions> {
     .innerJoin(regions, eq(listings.regionId, regions.id))
     .orderBy(asc(regions.name));
 
-  const [brands, fuels, sellerTypes] = await Promise.all([
-    distinct(listings.brand),
+  const [makes, fuels, sellerTypes] = await Promise.all([
+    distinct(listings.make),
     distinct(listings.fuel),
     distinct(listings.sellerType),
   ]);
 
-  return { brands, fuels, sellerTypes, regions: regionRows.map((r) => r.v) };
+  return { makes, fuels, sellerTypes, regions: regionRows.map((r) => r.v) };
 }
 
 // NOTE: intentionally excludes title/url. These rows are shipped to the browser
@@ -169,13 +185,15 @@ export async function getFilterOptions(): Promise<FilterOptions> {
 // directory of listings. See CLAUDE.md "Data exposure".
 export interface AnalysisRow {
   id: number;
-  brand: string | null;
+  make: string | null;
+  model: string | null;
   fuel: string | null;
   sellerType: string | null;
   district: string | null;
   price: number | null;
   mileageKm: number | null;
   modelYear: number | null;
+  enginePower: number | null;
 }
 
 /** Listings with the numeric fields the scatter plot uses (capped, de-identified). */
@@ -185,13 +203,15 @@ export async function getAnalysisRows(f: ListingFilters, limit = 5000): Promise<
   return db
     .select({
       id: listings.id,
-      brand: listings.brand,
+      make: listings.make,
+      model: listings.model,
       fuel: listings.fuel,
       sellerType: listings.sellerType,
       district: regions.name,
       price: listings.currentPrice,
       mileageKm: listings.mileageKm,
       modelYear: listings.modelYear,
+      enginePower: listings.enginePower,
     })
     .from(listings)
     .leftJoin(regions, eq(listings.regionId, regions.id))
@@ -203,7 +223,8 @@ export interface PriceDrop {
   id: number;
   title: string | null;
   url: string | null;
-  brand: string | null;
+  make: string | null;
+  model: string | null;
   currency: string | null;
   previousPrice: number;
   currentPrice: number;
@@ -220,7 +241,7 @@ export async function getBiggestPriceDrops(limit = 20): Promise<PriceDrop[]> {
         row_number() OVER (PARTITION BY listing_id ORDER BY observed_at DESC) AS rn
       FROM price_history
     )
-    SELECT l.id, l.title, l.url, l.brand, l.currency,
+    SELECT l.id, l.title, l.url, l.make, l.model, l.currency,
       prev.price AS "previousPrice",
       cur.price AS "currentPrice",
       (prev.price - cur.price) AS drop,
@@ -256,7 +277,7 @@ export interface Summary {
   newToday: number;
   /** Listings whose latest price snapshot dropped within the last 24h. */
   drops24h: number;
-  byBrand: GroupStat[];
+  byMake: GroupStat[];
   byRegion: GroupStat[];
 }
 
@@ -318,12 +339,12 @@ export async function getSummary(): Promise<Summary> {
   `);
   const drops24h = rowsOf<{ n: number }>(recentDrops)[0]?.n ?? 0;
 
-  const byBrand = await db.execute(sql`
-    SELECT brand AS label, count(*)::int AS count,
+  const byMake = await db.execute(sql`
+    SELECT make AS label, count(*)::int AS count,
       percentile_cont(0.5) WITHIN GROUP (ORDER BY current_price)::int AS "medianPrice"
     FROM listings
-    WHERE brand IS NOT NULL AND current_price IS NOT NULL AND ${CONTINENTAL_SQL}
-    GROUP BY brand ORDER BY count DESC LIMIT 12
+    WHERE make IS NOT NULL AND current_price IS NOT NULL AND ${CONTINENTAL_SQL}
+    GROUP BY make ORDER BY count DESC LIMIT 12
   `);
 
   const byRegion = await db.execute(sql`
@@ -343,7 +364,7 @@ export async function getSummary(): Promise<Summary> {
     marketHeat,
     newToday: t?.newToday ?? 0,
     drops24h,
-    byBrand: rowsOf<GroupStat>(byBrand),
+    byMake: rowsOf<GroupStat>(byMake),
     byRegion: rowsOf<GroupStat>(byRegion),
   };
 }

@@ -28,7 +28,8 @@ function parseFilters(sp: SearchParams): ListingFilters {
   const sort = str(sp.sort) as SortKey | undefined;
   const dir = str(sp.dir) === "asc" ? "asc" : "desc";
   return {
-    brand: str(sp.brand),
+    make: str(sp.make),
+    model: str(sp.model),
     fuel: str(sp.fuel),
     sellerType: str(sp.sellerType),
     region: str(sp.region),
@@ -56,7 +57,7 @@ function queryString(base: ListingFilters, overrides: Record<string, string | nu
 }
 
 const COLUMNS: { key: SortKey; label: string; num?: boolean }[] = [
-  { key: "brand", label: "Brand" },
+  { key: "make", label: "Make" },
   { key: "price", label: "Price", num: true },
   { key: "year", label: "Year", num: true },
   { key: "mileage", label: "Mileage (km)", num: true },
@@ -99,7 +100,7 @@ export default async function ListingsPage({
 
       <form className="panel" method="get" action="/listings">
         <div className="filters">
-          {sel("brand", "Brand", options.brands)}
+          {sel("make", "Make", options.makes)}
           {sel("fuel", "Fuel", options.fuels)}
           {sel("sellerType", "Seller", options.sellerTypes)}
           {sel("region", "District", options.regions)}
@@ -142,6 +143,7 @@ export default async function ListingsPage({
           <thead>
             <tr>
               <th>Title</th>
+              <th>Model</th>
               {COLUMNS.map((c) => {
                 const active = filters.sort === c.key;
                 const nextDir = active && filters.dir === "desc" ? "asc" : "desc";
@@ -163,7 +165,7 @@ export default async function ListingsPage({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={9} className="muted">
+                <td colSpan={10} className="muted">
                   No listings match these filters.
                 </td>
               </tr>
@@ -179,9 +181,10 @@ export default async function ListingsPage({
                       (r.title ?? "(untitled)")
                     )}
                   </td>
+                  <td>{r.model ?? "—"}</td>
                   <td>
                     {(() => {
-                      const mark = brandMark(r.brand);
+                      const mark = brandMark(r.make);
                       return (
                         <span className="brand-cell">
                           {mark?.mono && (
@@ -193,7 +196,7 @@ export default async function ListingsPage({
                               aria-hidden="true"
                             />
                           )}
-                          <span>{r.brand ?? "—"}</span>
+                          <span>{r.make ?? "—"}</span>
                         </span>
                       );
                     })()}
