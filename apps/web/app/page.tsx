@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import Gauge from "@/components/Gauge";
+import { brandLogo } from "@/lib/brands";
 import { formatNumber, formatPrice } from "@/lib/format";
 import { getBiggestPriceDrops, getSummary } from "@/lib/queries";
 
@@ -97,18 +98,26 @@ export default async function DashboardPage() {
             <p className="muted">No data yet. Run the scraper to populate the database.</p>
           ) : (
             <div className="barlist">
-              {summary.byBrand.map((b) => (
+              {summary.byBrand.map((b) => {
+                const logo = brandLogo(b.label);
+                return (
                 <div className="barrow" key={b.label}>
-                  <span className="brand-chip" aria-hidden="true">
-                    {initials(b.label)}
-                  </span>
+                  {logo ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img className="brand-logo" src={logo} alt="" aria-hidden="true" />
+                  ) : (
+                    <span className="brand-chip" aria-hidden="true">
+                      {initials(b.label)}
+                    </span>
+                  )}
                   <span className="bar-label">{b.label}</span>
                   <span className="bar">
                     <span className="bar-fill" style={{ width: `${(b.count / maxBrand) * 100}%` }} />
                   </span>
                   <span className="bar-value">{formatPrice(b.medianPrice)}</span>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

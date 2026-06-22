@@ -59,8 +59,17 @@ export interface ListingRow {
   lastSeenAt: Date;
 }
 
+// Continental Portugal only: drop listings whose location parsed to a
+// non-mainland region (Madeira, Azores, the odd Spanish border town) — those have
+// a region string but no mainland-district region_id. Rows with no parsed region
+// at all (unknown location) are kept. As raw SQL for the execute() queries:
+const CONTINENTAL_SQL = sql`(region IS NULL OR region_id IS NOT NULL)`;
+// As a drizzle condition for the query-builder queries:
+const continental = (): SQL =>
+  sql`(${listings.region} is null or ${listings.regionId} is not null)`;
+
 function buildWhere(f: ListingFilters): SQL | undefined {
-  const conds: SQL[] = [];
+  const conds: SQL[] = [continental()];
   if (f.brand) conds.push(eq(listings.brand, f.brand));
   if (f.fuel) conds.push(eq(listings.fuel, f.fuel));
   if (f.sellerType) conds.push(eq(listings.sellerType, f.sellerType));
@@ -134,7 +143,7 @@ export async function getFilterOptions(): Promise<FilterOptions> {
     const rows = await db
       .selectDistinct({ v: col })
       .from(listings)
-      .where(sql`${col} is not null`)
+      .where(and(sql`${col} is not null`, continental()))
       .orderBy(asc(col));
     return rows.map((r) => r.v as string).filter((v) => typeof v === "string" && v !== "");
   };
@@ -220,6 +229,7 @@ export async function getBiggestPriceDrops(limit = 20): Promise<PriceDrop[]> {
     JOIN ranked prev ON prev.listing_id = cur.listing_id AND prev.rn = 2
     JOIN listings l ON l.id = cur.listing_id
     WHERE cur.rn = 1 AND prev.price > cur.price
+      AND (l.region IS NULL OR l.region_id IS NOT NULL)
     ORDER BY drop DESC
     LIMIT ${limit}
   `);
@@ -255,14 +265,15 @@ export async function getSummary(): Promise<Summary> {
 
   const totals = await db.execute(sql`
     SELECT
-      (SELECT count(*)::int FROM listings) AS total,
-      (SELECT count(*)::int FROM listings WHERE is_active) AS active,
+      (SELECT count(*)::int FROM listings WHERE ${CONTINENTAL_SQL}) AS total,
+      (SELECT count(*)::int FROM listings WHERE is_active AND ${CONTINENTAL_SQL}) AS active,
       (SELECT count(DISTINCT listing_id)::int FROM price_history) AS "withPriceHistory",
-      (SELECT count(*)::int FROM listings WHERE first_seen_at >= date_trunc('day', now())) AS "newToday",
+      (SELECT count(*)::int FROM listings
+         WHERE first_seen_at >= date_trunc('day', now()) AND ${CONTINENTAL_SQL}) AS "newToday",
       (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY current_price)::int
-         FROM listings WHERE current_price IS NOT NULL) AS "medianPrice",
+         FROM listings WHERE current_price IS NOT NULL AND ${CONTINENTAL_SQL}) AS "medianPrice",
       (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY mileage_km)::int
-         FROM listings WHERE mileage_km IS NOT NULL) AS "medianMileage"
+         FROM listings WHERE mileage_km IS NOT NULL AND ${CONTINENTAL_SQL}) AS "medianMileage"
   `);
   const t = rowsOf<{
     total: number;
@@ -277,7 +288,8 @@ export async function getSummary(): Promise<Summary> {
   // the available window. ~1.0 means a typical day; >1 a busier-than-usual one.
   const heatRows = await db.execute(sql`
     WITH fs AS (
-      SELECT first_seen_at FROM listings WHERE first_seen_at >= now() - interval '30 days'
+      SELECT first_seen_at FROM listings
+      WHERE first_seen_at >= now() - interval '30 days' AND ${CONTINENTAL_SQL}
     )
     SELECT
       (SELECT count(*)::int FROM fs WHERE first_seen_at >= now() - interval '24 hours') AS last24,
@@ -299,8 +311,10 @@ export async function getSummary(): Promise<Summary> {
     SELECT count(*)::int AS n
     FROM ranked cur
     JOIN ranked prev ON prev.listing_id = cur.listing_id AND prev.rn = 2
+    JOIN listings l ON l.id = cur.listing_id
     WHERE cur.rn = 1 AND prev.price > cur.price
       AND cur.observed_at >= now() - interval '24 hours'
+      AND (l.region IS NULL OR l.region_id IS NOT NULL)
   `);
   const drops24h = rowsOf<{ n: number }>(recentDrops)[0]?.n ?? 0;
 
@@ -308,7 +322,7 @@ export async function getSummary(): Promise<Summary> {
     SELECT brand AS label, count(*)::int AS count,
       percentile_cont(0.5) WITHIN GROUP (ORDER BY current_price)::int AS "medianPrice"
     FROM listings
-    WHERE brand IS NOT NULL AND current_price IS NOT NULL
+    WHERE brand IS NOT NULL AND current_price IS NOT NULL AND ${CONTINENTAL_SQL}
     GROUP BY brand ORDER BY count DESC LIMIT 12
   `);
 

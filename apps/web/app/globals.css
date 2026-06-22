@@ -343,6 +343,15 @@ select {
   align-items: center;
   justify-content: center;
 }
+.brand-logo {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  background: #fff;
+  object-fit: contain;
+  padding: 3px;
+}
 .bar-label {
   width: 92px;
   font-size: 12px;

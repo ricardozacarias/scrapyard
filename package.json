@@ -9,6 +9,7 @@
     "db:migrate": "pnpm --filter @scrapyard/db migrate",
     "db:studio": "pnpm --filter @scrapyard/db studio",
     "scrape": "pnpm --filter scraper start",
+    "analysis": "pnpm --filter analysis exec tsx",
     "web:dev": "pnpm --filter web dev",
     "web:build": "pnpm --filter web build",
     "typecheck": "pnpm -r typecheck"
