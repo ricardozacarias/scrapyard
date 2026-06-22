@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { brandMark } from "@/lib/brands";
 import { formatNumber, formatPrice } from "@/lib/format";
 import {
   getFilterOptions,
@@ -178,7 +179,25 @@ export default async function ListingsPage({
                       (r.title ?? "(untitled)")
                     )}
                   </td>
-                  <td>{r.brand ?? "—"}</td>
+                  <td>
+                    {(() => {
+                      const mark = brandMark(r.brand);
+                      return (
+                        <span className="brand-cell">
+                          {mark?.mono && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              className="brand-logo-mono sm"
+                              src={mark.logo}
+                              alt=""
+                              aria-hidden="true"
+                            />
+                          )}
+                          <span>{r.brand ?? "—"}</span>
+                        </span>
+                      );
+                    })()}
+                  </td>
                   <td className="num">{formatPrice(r.currentPrice, r.currency ?? "EUR")}</td>
                   <td className="num">{r.modelYear ?? "—"}</td>
                   <td className="num">{formatNumber(r.mileageKm)}</td>

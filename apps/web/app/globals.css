@@ -328,29 +328,51 @@ select {
   align-items: center;
   gap: 10px;
 }
-.brand-chip {
+/* Fixed-width identity column so bars stay aligned whether a row shows a
+   glyph + label or just a name-wordmark. */
+.brand-id {
   flex: none;
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
-  color: var(--accent);
-  font-family: ui-monospace, monospace;
-  font-size: 10px;
-  font-weight: 700;
+  width: 128px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 8px;
+  overflow: hidden;
 }
-.brand-logo {
+.brand-id .bar-label {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+}
+.brand-logo-mono {
   flex: none;
   width: 26px;
   height: 26px;
-  border-radius: 6px;
-  background: #fff;
   object-fit: contain;
-  padding: 3px;
+  /* flatten the logo to a single ink-white glyph that sits on the dark panel */
+  filter: grayscale(1) brightness(0) invert(1);
+}
+/* Brand cell in the listings table: small glyph + name. */
+.brand-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.brand-logo-mono.sm {
+  width: 18px;
+  height: 18px;
+}
+/* Fallback for filled-emblem / logo-less brands: the name in white. */
+.brand-wordmark {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .bar-label {
   width: 92px;

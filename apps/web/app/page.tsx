@@ -1,18 +1,11 @@
 import Link from "next/link";
 
 import Gauge from "@/components/Gauge";
-import { brandLogo } from "@/lib/brands";
+import { brandMark } from "@/lib/brands";
 import { formatNumber, formatPrice } from "@/lib/format";
 import { getBiggestPriceDrops, getSummary } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
-
-/** Placeholder logo chip text until the real brand-logo registry lands. */
-function initials(label: string): string {
-  const words = label.split(/[\s-]+/).filter(Boolean);
-  if (words.length >= 2) return (words[0]![0]! + words[1]![0]!).toUpperCase();
-  return label.replace(/[^A-Za-z0-9]/g, "").slice(0, 3).toUpperCase();
-}
 
 export default async function DashboardPage() {
   const [summary, movers] = await Promise.all([getSummary(), getBiggestPriceDrops(8)]);
@@ -99,18 +92,21 @@ export default async function DashboardPage() {
           ) : (
             <div className="barlist">
               {summary.byBrand.map((b) => {
-                const logo = brandLogo(b.label);
+                const mark = brandMark(b.label);
                 return (
                 <div className="barrow" key={b.label}>
-                  {logo ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img className="brand-logo" src={logo} alt="" aria-hidden="true" />
-                  ) : (
-                    <span className="brand-chip" aria-hidden="true">
-                      {initials(b.label)}
-                    </span>
-                  )}
-                  <span className="bar-label">{b.label}</span>
+                  <span className="brand-id">
+                    {mark && mark.mono ? (
+                      <>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img className="brand-logo-mono" src={mark.logo} alt="" aria-hidden="true" />
+                        <span className="bar-label">{b.label}</span>
+                      </>
+                    ) : (
+                      // No clean glyph — show the name itself as a white wordmark.
+                      <span className="brand-wordmark">{b.label}</span>
+                    )}
+                  </span>
                   <span className="bar">
                     <span className="bar-fill" style={{ width: `${(b.count / maxBrand) * 100}%` }} />
                   </span>

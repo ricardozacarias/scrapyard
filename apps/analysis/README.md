@@ -23,6 +23,9 @@ Copy `scripts/price-by-brand.ts`, change the query, run it. The harness
 
 - `printTable(rows)` — print to the terminal with a row count.
 - `save(name, rows, format?)` — write `out/<name>.csv` (or `"json"`).
+- `chart(name, plotOptions, format?)` — render an [Observable Plot](https://observablehq.com/plot)
+  spec to `out/<name>.html` (opens in a browser; pass `"svg"` for a bare vector
+  file). Same library as the web app, so specs transfer to web components.
 
 For quick throwaway queries you can also drop to raw SQL:
 

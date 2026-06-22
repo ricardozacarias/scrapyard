@@ -102,26 +102,36 @@ export function save(name: string, rows: Row[], format: "csv" | "json" = "csv"):
  *     y: { grid: true },
  *   });
  *
- * Plot returns a bare <svg> for simple plots and a <figure> wrapper when the
- * spec adds a title/caption/legend; we save the former as `.svg` and the latter
- * as a self-contained `.html` (the figure embeds its own svg + legend markup).
+ * Defaults to a self-contained `.html` file (the rendered SVG embedded inline) —
+ * it opens straight in a browser, which is the smoothest viewer for dense plots
+ * and avoids the standalone-file Gatekeeper prompt. Pass "svg" if you want the
+ * bare vector file to embed elsewhere; that falls back to HTML for specs whose
+ * legend/title makes Plot emit a <figure> wrapper rather than a lone <svg>.
  * Returns the absolute path written.
  */
-export function chart(name: string, options: Plot.PlotOptions): string {
+export function chart(name: string, options: Plot.PlotOptions, format: "html" | "svg" = "html"): string {
   const { document } = new JSDOM("").window;
   const node = Plot.plot({ ...options, document });
+  const isSvg = node.tagName.toLowerCase() === "svg";
 
   mkdirSync(OUT_DIR, { recursive: true });
-  const isSvg = node.tagName.toLowerCase() === "svg";
-  if (isSvg && !node.getAttribute("xmlns")) {
-    node.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+
+  if (format === "svg" && isSvg) {
+    if (!node.getAttribute("xmlns")) {
+      node.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    }
+    const path = join(OUT_DIR, `${name}.svg`);
+    writeFileSync(path, node.outerHTML);
+    console.log(`→ wrote chart to ${path}`);
+    return path;
   }
-  const ext = isSvg ? "svg" : "html";
-  const path = join(OUT_DIR, `${name}.${ext}`);
-  const contents = isSvg
-    ? node.outerHTML
-    : `<!doctype html><meta charset="utf-8"><body style="margin:1rem;font:13px system-ui">${node.outerHTML}`;
-  writeFileSync(path, contents);
+
+  if (format === "svg" && !isSvg) {
+    console.log("(spec has a legend/title → emitting .html instead of .svg)");
+  }
+  const path = join(OUT_DIR, `${name}.html`);
+  const html = `<!doctype html><meta charset="utf-8"><title>${name}</title><body style="margin:1.5rem;font:13px system-ui">${node.outerHTML}`;
+  writeFileSync(path, html);
   console.log(`→ wrote chart to ${path}`);
   return path;
 }
