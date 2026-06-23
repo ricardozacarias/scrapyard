@@ -32,6 +32,16 @@ The web app is built to that line:
   and `url`** on purpose. Points are non-clickable and tooltips show brand +
   numeric values only. Don't add identifying fields back to the points shipped
   to the client.
+- **The `/analysis` map ships the full de-identified dataset.** The interactive
+  choropleth (`MapExplorer` + `getMapData` in `apps/web/lib/queries.ts`) sends
+  **every priced listing** to the browser — make, model, year, mileage, price,
+  district, concelho — so make/model/year/mileage filtering and region medians
+  can be recomputed client-side with no round-trips. This is a **deliberate owner
+  decision** (chosen over a server-aggregation hybrid) for filter flexibility. It
+  is the one place the *whole* structured dataset leaves the server, so the line
+  is held strictly elsewhere: the payload is **de-identified — no `title`, `url`,
+  or `id`** — and dictionary-encoded/rounded (`getMapData`). Keep it that way; do
+  not add identifying fields to `MapPayload`.
 - **Aggregates are fine to expose.** `getSummary` / price-drop queries return
   medians, counts, and a top-20 list — safe to keep public.
 

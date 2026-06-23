@@ -173,8 +173,8 @@ export default function Gauge({
       <div className="gauge-caption">
         <span className="gauge-title">{label}</span>
         {tip && (
-          <span className="gauge-info" tabIndex={0} role="button" aria-label={`What is ${label}?`}>
-            ?<span className="gauge-tip" role="tooltip">{tip}</span>
+          <span className="info-dot" tabIndex={0} role="button" aria-label={`What is ${label}?`}>
+            ?<span className="info-tip" role="tooltip">{tip}</span>
           </span>
         )}
       </div>

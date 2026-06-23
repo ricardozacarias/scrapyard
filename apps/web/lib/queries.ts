@@ -265,7 +265,6 @@ export interface GroupStat {
 
 export interface Summary {
   total: number;
-  active: number;
   withPriceHistory: number;
   /** Median current price across all priced listings (gauge). */
   medianPrice: number;
@@ -275,10 +274,17 @@ export interface Summary {
   marketHeat: number;
   /** Listings first seen since midnight (local server time). */
   newToday: number;
-  /** Listings whose latest price snapshot dropped within the last 24h. */
-  drops24h: number;
-  byMake: GroupStat[];
-  byRegion: GroupStat[];
+  /**
+   * Estimated cars that left the market yesterday: last seen during yesterday
+   * but absent from the most recent scrape. A proxy — we can't observe actual
+   * sales, only when an ad disappears — and the latest day is provisional until
+   * the absence is confirmed across further scrapes.
+   */
+  soldYesterday: number;
+  /** Listings standvirtual rates as priced below market ("good deal"). */
+  belowMarket: number;
+  /** belowMarket as a % of listings that carry a price rating. */
+  belowMarketPct: number;
 }
 
 export async function getSummary(): Promise<Summary> {
@@ -287,10 +293,20 @@ export async function getSummary(): Promise<Summary> {
   const totals = await db.execute(sql`
     SELECT
       (SELECT count(*)::int FROM listings WHERE ${CONTINENTAL_SQL}) AS total,
-      (SELECT count(*)::int FROM listings WHERE is_active AND ${CONTINENTAL_SQL}) AS active,
       (SELECT count(DISTINCT listing_id)::int FROM price_history) AS "withPriceHistory",
       (SELECT count(*)::int FROM listings
          WHERE first_seen_at >= date_trunc('day', now()) AND ${CONTINENTAL_SQL}) AS "newToday",
+      -- left the market yesterday: last seen during yesterday, gone from the
+      -- latest scrape (a proxy for "sold" — see Summary.soldYesterday).
+      (SELECT count(*)::int FROM listings
+         WHERE last_seen_at >= date_trunc('day', now()) - interval '1 day'
+           AND last_seen_at <  date_trunc('day', now())
+           AND last_seen_at <  (SELECT max(last_seen_at) FROM listings WHERE ${CONTINENTAL_SQL})
+           AND ${CONTINENTAL_SQL}) AS "soldYesterday",
+      (SELECT count(*)::int FROM listings
+         WHERE price_evaluation = 'BELOW' AND ${CONTINENTAL_SQL}) AS "belowMarket",
+      (SELECT count(*)::int FROM listings
+         WHERE price_evaluation IS NOT NULL AND ${CONTINENTAL_SQL}) AS "rated",
       (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY current_price)::int
          FROM listings WHERE current_price IS NOT NULL AND ${CONTINENTAL_SQL}) AS "medianPrice",
       (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY mileage_km)::int
@@ -298,9 +314,11 @@ export async function getSummary(): Promise<Summary> {
   `);
   const t = rowsOf<{
     total: number;
-    active: number;
     withPriceHistory: number;
     newToday: number;
+    soldYesterday: number;
+    belowMarket: number;
+    rated: number;
     medianPrice: number;
     medianMileage: number;
   }>(totals)[0];
@@ -322,92 +340,159 @@ export async function getSummary(): Promise<Summary> {
   const avgDaily = h && h.span_days > 0 ? h.recent_total / h.span_days : 0;
   const marketHeat = avgDaily > 0 ? (h?.last24 ?? 0) / avgDaily : 0;
 
-  // Count listings whose most recent price snapshot is a drop, within 24h.
-  const recentDrops = await db.execute(sql`
-    WITH ranked AS (
-      SELECT listing_id, price, observed_at,
-        row_number() OVER (PARTITION BY listing_id ORDER BY observed_at DESC) AS rn
-      FROM price_history
-    )
-    SELECT count(*)::int AS n
-    FROM ranked cur
-    JOIN ranked prev ON prev.listing_id = cur.listing_id AND prev.rn = 2
-    JOIN listings l ON l.id = cur.listing_id
-    WHERE cur.rn = 1 AND prev.price > cur.price
-      AND cur.observed_at >= now() - interval '24 hours'
-      AND (l.region IS NULL OR l.region_id IS NOT NULL)
-  `);
-  const drops24h = rowsOf<{ n: number }>(recentDrops)[0]?.n ?? 0;
-
-  const byMake = await db.execute(sql`
-    SELECT make AS label, count(*)::int AS count,
-      percentile_cont(0.5) WITHIN GROUP (ORDER BY current_price)::int AS "medianPrice"
-    FROM listings
-    WHERE make IS NOT NULL AND current_price IS NOT NULL AND ${CONTINENTAL_SQL}
-    GROUP BY make ORDER BY count DESC LIMIT 12
-  `);
-
-  const byRegion = await db.execute(sql`
-    SELECT r.name AS label, count(*)::int AS count,
-      percentile_cont(0.5) WITHIN GROUP (ORDER BY l.current_price)::int AS "medianPrice"
-    FROM listings l JOIN regions r ON r.id = l.region_id
-    WHERE l.current_price IS NOT NULL
-    GROUP BY r.name ORDER BY count DESC LIMIT 18
-  `);
+  const belowMarket = t?.belowMarket ?? 0;
+  const rated = t?.rated ?? 0;
 
   return {
     total: t?.total ?? 0,
-    active: t?.active ?? 0,
     withPriceHistory: t?.withPriceHistory ?? 0,
     medianPrice: t?.medianPrice ?? 0,
     medianMileage: t?.medianMileage ?? 0,
     marketHeat,
     newToday: t?.newToday ?? 0,
-    drops24h,
-    byMake: rowsOf<GroupStat>(byMake),
-    byRegion: rowsOf<GroupStat>(byRegion),
+    soldYesterday: t?.soldYesterday ?? 0,
+    belowMarket,
+    belowMarketPct: rated > 0 ? Math.round((100 * belowMarket) / rated) : 0,
   };
 }
 
-export interface RegionStat {
-  name: string;
+export interface ModelStat {
+  make: string;
+  model: string;
   count: number;
-  medianPrice: number;
 }
 
+/** The most-listed make+model combinations, by listing count (volume). */
+export async function getTopModels(limit = 15): Promise<ModelStat[]> {
+  const db = getDb();
+  const res = await db.execute(sql`
+    SELECT make, model, count(*)::int AS count
+    FROM listings
+    WHERE make IS NOT NULL AND model IS NOT NULL AND ${CONTINENTAL_SQL}
+    GROUP BY make, model
+    ORDER BY count DESC
+    LIMIT ${limit}
+  `);
+  return rowsOf<ModelStat>(res);
+}
+
+export interface YearStat {
+  year: number;
+  count: number;
+}
+
+/** Listing count per model year over the last ~20 model years, oldest→newest. */
+export async function getInventoryByYear(): Promise<YearStat[]> {
+  const db = getDb();
+  const res = await db.execute(sql`
+    SELECT model_year AS year, count(*)::int AS count
+    FROM listings
+    WHERE model_year IS NOT NULL
+      AND model_year >= extract(year FROM now())::int - 20
+      AND model_year <= extract(year FROM now())::int + 1
+      AND ${CONTINENTAL_SQL}
+    GROUP BY model_year
+    ORDER BY model_year
+  `);
+  return rowsOf<YearStat>(res);
+}
+
+
 /**
- * Median price + listing count per district, for the choropleth. Aggregates
- * only (no per-listing rows) — safe to ship to the client. See CLAUDE.md
+ * Compact, dictionary-encoded, columnar payload of every priced listing, for
+ * the interactive map. Aggregation (median price per region under arbitrary
+ * make/model/year/mileage filters) happens client-side, so the raw points must
+ * ship to the browser. Deliberately DE-IDENTIFIED — no title / url / id — so it
+ * exposes structured attributes only, never the per-ad identity. See CLAUDE.md
  * "Data exposure".
  */
-export async function getDistrictStats(): Promise<RegionStat[]> {
-  const db = getDb();
-  const res = await db.execute(sql`
-    SELECT r.name AS name, count(*)::int AS count,
-      percentile_cont(0.5) WITHIN GROUP (ORDER BY l.current_price)::int AS "medianPrice"
-    FROM listings l
-    JOIN regions r ON r.id = l.region_id
-    WHERE l.current_price IS NOT NULL AND r.level = 'district'
-    GROUP BY r.name
-  `);
-  return rowsOf<RegionStat>(res);
+export interface MapPayload {
+  makes: string[];
+  models: string[];
+  municipalities: string[];
+  districts: string[];
+  /** Per-listing columns (parallel arrays, length === count). Indices point
+   *  into the dictionaries above; -1 means "unknown". */
+  make: number[];
+  model: number[];
+  year: number[]; // 0 when unknown
+  mileage: number[]; // -1 when unknown
+  price: number[];
+  muni: number[];
+  dist: number[];
+  count: number;
 }
 
-/**
- * Median price + listing count per municipality (concelho), for the high-res
- * choropleth. Aggregates only — safe to ship to the client.
- */
-export async function getMunicipalityStats(): Promise<RegionStat[]> {
+interface MapRow {
+  make: string | null;
+  model: string | null;
+  year: number | null;
+  mileage: number | null;
+  price: number | null;
+  municipality: string | null;
+  district: string | null;
+}
+
+export async function getMapData(): Promise<MapPayload> {
   const db = getDb();
   const res = await db.execute(sql`
-    SELECT r.name AS name, count(*)::int AS count,
-      percentile_cont(0.5) WITHIN GROUP (ORDER BY l.current_price)::int AS "medianPrice"
+    SELECT l.make AS make, l.model AS model, l.model_year AS year,
+      l.mileage_km AS mileage, l.current_price AS price,
+      muni.name AS municipality, dist.name AS district
     FROM listings l
-    JOIN regions r ON r.id = l.municipality_id
-    WHERE l.current_price IS NOT NULL AND r.level = 'municipality'
-    GROUP BY r.name
+    JOIN regions dist ON dist.id = l.region_id AND dist.level = 'district'
+    LEFT JOIN regions muni ON muni.id = l.municipality_id AND muni.level = 'municipality'
+    WHERE l.current_price IS NOT NULL AND l.region_id IS NOT NULL
   `);
-  return rowsOf<RegionStat>(res);
+  const rows = rowsOf<MapRow>(res);
+
+  // Dictionary-encode the string columns so each listing ships as small ints.
+  const makes: string[] = [];
+  const models: string[] = [];
+  const municipalities: string[] = [];
+  const districts: string[] = [];
+  const intern = (dict: string[], idx: Map<string, number>, v: string | null): number => {
+    if (v == null) return -1;
+    let i = idx.get(v);
+    if (i === undefined) {
+      i = dict.length;
+      dict.push(v);
+      idx.set(v, i);
+    }
+    return i;
+  };
+  const makeIdx = new Map<string, number>();
+  const modelIdx = new Map<string, number>();
+  const muniIdx = new Map<string, number>();
+  const distIdx = new Map<string, number>();
+
+  const out: MapPayload = {
+    makes,
+    models,
+    municipalities,
+    districts,
+    make: [],
+    model: [],
+    year: [],
+    mileage: [],
+    price: [],
+    muni: [],
+    dist: [],
+    count: rows.length,
+  };
+
+  for (const r of rows) {
+    out.make.push(intern(makes, makeIdx, r.make));
+    out.model.push(intern(models, modelIdx, r.model));
+    out.year.push(r.year ?? 0);
+    // Round mileage to the nearest 1000 km — smaller payload, better gzip, and a
+    // touch more de-identifying. Plenty precise for a regional median.
+    out.mileage.push(r.mileage == null ? -1 : Math.round(r.mileage / 1000) * 1000);
+    out.price.push(r.price ?? 0);
+    out.muni.push(intern(municipalities, muniIdx, r.municipality));
+    out.dist.push(intern(districts, distIdx, r.district));
+  }
+  return out;
 }
 
 /** Normalize neon-http execute() results to a plain row array. */

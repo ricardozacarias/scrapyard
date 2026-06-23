@@ -281,7 +281,8 @@ select {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
-.gauge-info {
+/* small "?" info dot with a hover/focus tooltip — used in gauges and stat tiles */
+.info-dot {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -296,13 +297,13 @@ select {
   line-height: 1;
   cursor: help;
 }
-.gauge-info:hover,
-.gauge-info:focus-visible {
+.info-dot:hover,
+.info-dot:focus-visible {
   border-color: var(--accent);
   color: var(--accent);
   outline: none;
 }
-.gauge-tip {
+.info-tip {
   position: absolute;
   bottom: 160%;
   left: 50%;
@@ -326,7 +327,7 @@ select {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
   pointer-events: none;
 }
-.gauge-tip::after {
+.info-tip::after {
   content: "";
   position: absolute;
   top: 100%;
@@ -335,8 +336,8 @@ select {
   border: 5px solid transparent;
   border-top-color: var(--border);
 }
-.gauge-info:hover .gauge-tip,
-.gauge-info:focus-visible .gauge-tip {
+.info-dot:hover .info-tip,
+.info-dot:focus-visible .info-tip {
   opacity: 1;
   visibility: visible;
 }
@@ -354,6 +355,9 @@ select {
   padding: 16px;
 }
 .tile .label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   color: var(--muted);
   font-size: 11px;
   text-transform: uppercase;
@@ -365,6 +369,12 @@ select {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-variant-numeric: tabular-nums;
   margin-top: 2px;
+}
+.tile-sub {
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
 }
 .tile.accent {
   background: var(--accent);
@@ -493,6 +503,169 @@ select {
   }
 }
 
+/* ---- interactive map (analysis · geography) ---- */
+.map-explorer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.map-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px 16px;
+  align-items: end;
+}
+.map-controls .ctl {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.map-controls .ctl > span {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+.seg {
+  display: inline-flex;
+  align-self: end;
+  height: 35px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel-2);
+}
+.seg button {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.seg button.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+/* two-thumb range slider */
+.dualrange {
+  position: relative;
+  height: 22px;
+  display: flex;
+  align-items: center;
+}
+.dualrange-rail {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 4px;
+  border-radius: 3px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+}
+.dualrange-fill {
+  position: absolute;
+  height: 4px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.dualrange input[type="range"] {
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  background: none;
+  pointer-events: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.dualrange input[type="range"]::-webkit-slider-runnable-track {
+  background: none;
+}
+.dualrange input[type="range"]::-moz-range-track {
+  background: none;
+}
+.dualrange input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  cursor: pointer;
+}
+.dualrange input[type="range"]::-moz-range-thumb {
+  pointer-events: auto;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  cursor: pointer;
+}
+.map-summary {
+  font-size: 12px;
+  margin: 0;
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.map-empty-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.map-empty-key i {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  display: inline-block;
+}
+.map-stage {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.map-plot {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+.map-inset {
+  flex: none;
+  width: 360px;
+  margin-top: 0;
+}
+@media (max-width: 760px) {
+  .map-inset {
+    width: 100%;
+  }
+}
+/* Observable Plot's tip defaults to the (transparent) plot background, which
+   renders as unreadable on the bare page. Force a solid panel + light text. */
+.map-plot [aria-label="tip"] path {
+  fill: var(--panel-2) !important;
+  stroke: var(--border) !important;
+}
+.map-plot [aria-label="tip"] text {
+  fill: var(--text) !important;
+}
+
 /* ---- bar lists (brand / district) ---- */
 .barlist {
   display: flex;
@@ -546,7 +719,7 @@ select {
   text-overflow: ellipsis;
 }
 .bar-label.wide {
-  width: 120px;
+  width: 152px;
 }
 .bar {
   flex: 1;
@@ -570,6 +743,17 @@ select {
   font-family: ui-monospace, monospace;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---- model-year column histogram ---- */
+.histogram {
+  width: 100%;
+  display: block;
+}
+.hist-axis {
+  fill: var(--muted);
+  font-size: 9px;
+  font-family: ui-monospace, monospace;
 }
 
 /* ---- market movers ---- */

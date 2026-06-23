@@ -1,9 +1,10 @@
 import Link from "next/link";
 
 import Gauge from "@/components/Gauge";
+import YearHistogram from "@/components/YearHistogram";
 import { brandMark } from "@/lib/brands";
 import { formatNumber, formatPrice } from "@/lib/format";
-import { getBiggestPriceDrops, getSummary } from "@/lib/queries";
+import { getBiggestPriceDrops, getInventoryByYear, getSummary, getTopModels } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -15,9 +16,13 @@ function initials(label: string): string {
 }
 
 export default async function DashboardPage() {
-  const [summary, movers] = await Promise.all([getSummary(), getBiggestPriceDrops(8)]);
-  const maxBrand = Math.max(1, ...summary.byMake.map((b) => b.count));
-  const maxRegion = Math.max(1, ...summary.byRegion.map((r) => r.count));
+  const [summary, movers, topModels, byYear] = await Promise.all([
+    getSummary(),
+    getBiggestPriceDrops(8),
+    getTopModels(15),
+    getInventoryByYear(),
+  ]);
+  const maxModel = Math.max(1, ...topModels.map((m) => m.count));
 
   return (
     <main className="container">
@@ -81,44 +86,69 @@ export default async function DashboardPage() {
           <div className="metric">{summary.total.toLocaleString("pt-PT")}</div>
         </div>
         <div className="tile">
-          <div className="label">Active</div>
-          <div className="metric">{summary.active.toLocaleString("pt-PT")}</div>
+          <div className="label">
+            Sold yesterday
+            <span className="info-dot" tabIndex={0} role="button" aria-label="How is sold yesterday estimated?">
+              ?
+              <span className="info-tip" role="tooltip">
+                Estimated. We can&apos;t see actual sales — only when an ad leaves the marketplace. This counts
+                cars last seen yesterday that are gone from the latest scrape. The most recent day is provisional
+                until the disappearance is confirmed by later scrapes.
+              </span>
+            </span>
+          </div>
+          <div className="metric">{summary.soldYesterday.toLocaleString("pt-PT")}</div>
         </div>
         <div className="tile accent">
           <div className="label">New today</div>
           <div className="metric">+{summary.newToday.toLocaleString("pt-PT")}</div>
         </div>
         <div className="tile">
-          <div className="label">Drops 24h</div>
-          <div className="metric drop">▼ {summary.drops24h.toLocaleString("pt-PT")}</div>
+          <div className="label">
+            Priced below market
+            <span className="info-dot" tabIndex={0} role="button" aria-label="What does priced below market mean?">
+              ?
+              <span className="info-tip" role="tooltip">
+                Share of listings standvirtual&apos;s own price rating flags as a good deal (below its estimated
+                market value), as a percentage of listings that carry a rating.
+              </span>
+            </span>
+          </div>
+          <div className="metric">{summary.belowMarketPct}%</div>
+          <div className="tile-sub">{summary.belowMarket.toLocaleString("pt-PT")} good deals</div>
         </div>
       </div>
 
       <div className="grid-2">
         <div className="panel">
-          <h2>By make · median &amp; volume</h2>
-          {summary.byMake.length === 0 ? (
+          <h2>Most common models · Top 15</h2>
+          <p className="muted" style={{ marginTop: -6, marginBottom: 12, fontSize: 12 }}>
+            Number of active listings per make &amp; model.
+          </p>
+          {topModels.length === 0 ? (
             <p className="muted">No data yet. Run the scraper to populate the database.</p>
           ) : (
             <div className="barlist">
-              {summary.byMake.map((b) => {
-                const mark = brandMark(b.label);
+              {topModels.map((m) => {
+                const mark = brandMark(m.make);
                 return (
-                <div className="barrow" key={b.label}>
-                  {mark && mark.mono ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img className="brand-logo-mono" src={mark.logo} alt="" aria-hidden="true" />
-                  ) : (
-                    <span className="brand-chip" aria-hidden="true">
-                      {initials(b.label)}
+                  <div className="barrow" key={`${m.make} ${m.model}`}>
+                    {mark && mark.mono ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img className="brand-logo-mono" src={mark.logo} alt="" aria-hidden="true" />
+                    ) : (
+                      <span className="brand-chip" aria-hidden="true">
+                        {initials(m.make)}
+                      </span>
+                    )}
+                    <span className="bar-label wide">
+                      {m.make} {m.model}
                     </span>
-                  )}
-                  <span className="bar-label">{b.label}</span>
-                  <span className="bar">
-                    <span className="bar-fill" style={{ width: `${(b.count / maxBrand) * 100}%` }} />
-                  </span>
-                  <span className="bar-value">{formatPrice(b.medianPrice)}</span>
-                </div>
+                    <span className="bar">
+                      <span className="bar-fill" style={{ width: `${(m.count / maxModel) * 100}%` }} />
+                    </span>
+                    <span className="bar-value">{formatNumber(m.count)}</span>
+                  </div>
                 );
               })}
             </div>
@@ -126,28 +156,11 @@ export default async function DashboardPage() {
         </div>
 
         <div className="panel">
-          <h2>By district · median &amp; volume</h2>
+          <h2>Inventory by model year</h2>
           <p className="muted" style={{ marginTop: -6, marginBottom: 12, fontSize: 12 }}>
-            See the full municipality-level <Link href="/analysis">heatmap of Portugal</Link>.
+            Listings by registration year — the age profile of available stock.
           </p>
-          {summary.byRegion.length === 0 ? (
-            <p className="muted">No region-mapped listings yet.</p>
-          ) : (
-            <div className="barlist">
-              {summary.byRegion.map((r) => (
-                <div className="barrow" key={r.label}>
-                  <span className="bar-label wide">{r.label}</span>
-                  <span className="bar">
-                    <span
-                      className="bar-fill alt"
-                      style={{ width: `${(r.count / maxRegion) * 100}%` }}
-                    />
-                  </span>
-                  <span className="bar-value">{formatPrice(r.medianPrice)}</span>
-                </div>
-              ))}
-            </div>
-          )}
+          <YearHistogram data={byYear} />
         </div>
       </div>
 

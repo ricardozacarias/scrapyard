@@ -1,6 +1,6 @@
-import Choropleth from "@/components/Choropleth";
+import MapExplorer from "@/components/MapExplorer";
 import { formatPrice } from "@/lib/format";
-import { getAnalysisRows, getBiggestPriceDrops, getMunicipalityStats } from "@/lib/queries";
+import { getAnalysisRows, getBiggestPriceDrops, getMapData } from "@/lib/queries";
 
 import Scatter from "./scatter";
 import SectionNav, { type Section } from "./section-nav";
@@ -14,10 +14,10 @@ const SECTIONS: Section[] = [
 ];
 
 export default async function AnalysisPage() {
-  const [rows, drops, municipalityStats] = await Promise.all([
+  const [rows, drops, mapData] = await Promise.all([
     getAnalysisRows({}, 5000),
     getBiggestPriceDrops(20),
-    getMunicipalityStats(),
+    getMapData(),
   ]);
 
   const points = rows.map((r) => ({
@@ -28,22 +28,6 @@ export default async function AnalysisPage() {
     modelYear: r.modelYear,
     enginePower: r.enginePower,
   }));
-
-  // Plain-language takeaways derived from the data we already fetched.
-  const withMedian = municipalityStats.filter((m) => m.medianPrice != null);
-  const cheapest = withMedian.reduce<(typeof withMedian)[number] | null>(
-    (a, b) => (a === null || b.medianPrice < a.medianPrice ? b : a),
-    null,
-  );
-  const priciest = withMedian.reduce<(typeof withMedian)[number] | null>(
-    (a, b) => (a === null || b.medianPrice > a.medianPrice ? b : a),
-    null,
-  );
-
-  const geoTakeaway =
-    cheapest && priciest
-      ? `Median asking prices span ${formatPrice(cheapest.medianPrice)} in ${cheapest.name} up to ${formatPrice(priciest.medianPrice)} in ${priciest.name}, across ${municipalityStats.length} concelhos.`
-      : `Median asking price by municipality across ${municipalityStats.length} concelhos.`;
 
   const moverTakeaway =
     drops.length > 0
@@ -66,17 +50,14 @@ export default async function AnalysisPage() {
             <header className="section-head">
               <span className="kicker">Geography</span>
               <h2>Where the market is priciest</h2>
-              <p className="takeaway">{geoTakeaway}</p>
+              <p className="takeaway">
+                Median asking price by region across {mapData.count.toLocaleString("pt-PT")}{" "}
+                listings. Switch between district and concelho resolution, filter by make, model,
+                year and mileage, and click a region to zoom into its concelhos.
+              </p>
             </header>
             <div className="panel">
-              <p className="muted" style={{ marginTop: 0, marginBottom: 14, fontSize: 12 }}>
-                Hover a concelho for its median price and listing count.
-              </p>
-              <Choropleth
-                data={municipalityStats}
-                geoUrl="/geo/concelhos.geojson"
-                nameProp="municipality"
-              />
+              <MapExplorer data={mapData} />
             </div>
           </section>
 
