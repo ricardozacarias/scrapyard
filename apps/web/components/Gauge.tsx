@@ -105,11 +105,11 @@ export default function Gauge({
       <svg className="gauge" viewBox="0 0 240 168" role="img" aria-label={`${label}: ${display} ${unit ?? ""}`}>
         {/* recessed dark face */}
         <path d={`${arcPath(R + 15, 180, 0)} Z`} fill="var(--gauge-face)" />
-        {/* base track */}
+        {/* base track (blends with the face; shows only under the rounded band ends) */}
         <path
           d={arcPath(R, 180, 0)}
           fill="none"
-          stroke="#000"
+          stroke="var(--gauge-face)"
           strokeWidth={STROKE + 2}
           strokeLinecap="round"
         />

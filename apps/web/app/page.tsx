@@ -3,7 +3,7 @@ import Link from "next/link";
 import Gauge from "@/components/Gauge";
 import YearHistogram from "@/components/YearHistogram";
 import { brandMark } from "@/lib/brands";
-import { formatNumber, formatPrice } from "@/lib/format";
+import { formatDayMonth, formatNumber, formatPrice } from "@/lib/format";
 import { getBiggestPriceDrops, getInventoryByYear, getSummary, getTopModels } from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
@@ -23,6 +23,9 @@ export default async function DashboardPage() {
     getInventoryByYear(),
   ]);
   const maxModel = Math.max(1, ...topModels.map((m) => m.count));
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
 
   return (
     <main className="container">
@@ -98,10 +101,12 @@ export default async function DashboardPage() {
             </span>
           </div>
           <div className="metric">{summary.soldYesterday.toLocaleString("pt-PT")}</div>
+          <div className="tile-sub">{formatDayMonth(yesterday)}</div>
         </div>
         <div className="tile accent">
           <div className="label">New today</div>
           <div className="metric">+{summary.newToday.toLocaleString("pt-PT")}</div>
+          <div className="tile-sub">{formatDayMonth(today)}</div>
         </div>
         <div className="tile">
           <div className="label">
