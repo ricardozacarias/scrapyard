@@ -226,6 +226,38 @@ select {
   font-weight: 600;
 }
 
+/* ---- scrape-run status pills ---- */
+.run-status {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 5px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.run-status.ok {
+  background: var(--green);
+  color: #07260f;
+}
+.run-status.fail {
+  background: var(--red);
+  color: #fff;
+}
+.run-status.running {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--accent);
+}
+.run-error {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--orange);
+  margin: 4px 0 0;
+  word-break: break-word;
+}
+
 /* ---- dashboard hero: gauge cluster + stat tiles ---- */
 .gauges {
   display: grid;

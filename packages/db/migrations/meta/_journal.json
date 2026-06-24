@@ -22,6 +22,20 @@
       "when": 1782142662964,
       "tag": "0002_faithful_devos",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1782205086042,
+      "tag": "0003_wonderful_blockbuster",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782205949200,
+      "tag": "0004_jittery_absorbing_man",
+      "breakpoints": true
     }
   ]
 }

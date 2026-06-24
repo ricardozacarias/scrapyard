@@ -118,7 +118,34 @@ export const priceHistory = pgTable(
   (t) => [index("price_history_listing_observed_idx").on(t.listingId, t.observedAt)],
 );
 
+/**
+ * One row per scraper run (cron or manual), recorded by apps/scraper at the end
+ * of every run — success or failure — so the dashboard can show run history
+ * without going to GitHub Actions. Operational metadata only (counts + timings),
+ * no listing data.
+ */
+export const scrapeRuns = pgTable(
+  "scrape_runs",
+  {
+    id: serial("id").primaryKey(),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+    status: text("status").notNull(), // 'running' | 'success' | 'failed'
+    pagesRequested: integer("pages_requested"),
+    parsed: integer("parsed").notNull().default(0),
+    upserted: integer("upserted").notNull().default(0),
+    snapshots: integer("snapshots").notNull().default(0),
+    deactivated: integer("deactivated").notNull().default(0),
+    error: text("error"),
+  },
+  (t) => [
+    index("scrape_runs_started_at_idx").on(t.startedAt),
+    check("scrape_runs_status_check", sql`${t.status} IN ('running', 'success', 'failed')`),
+  ],
+);
+
 export type Region = typeof regions.$inferSelect;
 export type Listing = typeof listings.$inferSelect;
 export type NewListing = typeof listings.$inferInsert;
 export type PriceHistoryRow = typeof priceHistory.$inferSelect;
+export type ScrapeRun = typeof scrapeRuns.$inferSelect;

@@ -1,0 +1,2 @@
+ALTER TABLE "scrape_runs" DROP CONSTRAINT "scrape_runs_status_check";--> statement-breakpoint
+ALTER TABLE "scrape_runs" ADD CONSTRAINT "scrape_runs_status_check" CHECK ("scrape_runs"."status" IN ('running', 'success', 'failed'));

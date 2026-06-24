@@ -12,6 +12,7 @@ import {
   lte,
   type SQL,
   regions,
+  scrapeRuns,
   sql,
 } from "@scrapyard/db";
 
@@ -493,6 +494,59 @@ export async function getMapData(): Promise<MapPayload> {
     out.dist.push(intern(districts, distIdx, r.district));
   }
   return out;
+}
+
+export interface ScrapeRunRow {
+  id: number;
+  startedAt: Date;
+  finishedAt: Date | null;
+  status: string;
+  pagesRequested: number | null;
+  parsed: number;
+  upserted: number;
+  snapshots: number;
+  deactivated: number;
+  error: string | null;
+}
+
+/** Recent scraper runs (newest first) — the cron history. Operational metadata only. */
+export async function getScrapeRuns(limit = 30): Promise<ScrapeRunRow[]> {
+  const db = getDb();
+  return db.select().from(scrapeRuns).orderBy(desc(scrapeRuns.startedAt)).limit(limit);
+}
+
+export interface DayActivity {
+  day: string;
+  snapshots: number;
+  newListings: number;
+}
+
+/**
+ * Derived day-by-day activity from the data itself (price snapshots + first-seen),
+ * so the runs page has real history even before the scrape_runs table fills up.
+ */
+export async function getScrapeActivity(days = 14): Promise<DayActivity[]> {
+  const db = getDb();
+  const res = await db.execute(sql`
+    WITH snaps AS (
+      SELECT date_trunc('day', observed_at) AS d, count(*)::int AS n
+      FROM price_history
+      WHERE observed_at >= now() - make_interval(days => ${days})
+      GROUP BY 1
+    ),
+    fresh AS (
+      SELECT date_trunc('day', first_seen_at) AS d, count(*)::int AS n
+      FROM listings
+      WHERE first_seen_at >= now() - make_interval(days => ${days})
+      GROUP BY 1
+    )
+    SELECT to_char(COALESCE(snaps.d, fresh.d), 'YYYY-MM-DD') AS day,
+      COALESCE(snaps.n, 0) AS snapshots,
+      COALESCE(fresh.n, 0) AS "newListings"
+    FROM snaps FULL OUTER JOIN fresh ON snaps.d = fresh.d
+    ORDER BY 1 DESC
+  `);
+  return rowsOf<DayActivity>(res);
 }
 
 /** Normalize neon-http execute() results to a plain row array. */

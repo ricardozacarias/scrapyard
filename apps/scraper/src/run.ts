@@ -4,10 +4,12 @@ import {
   buildMunicipalityResolver,
   buildRegionResolver,
   desc,
+  eq,
   getDb,
   inArray,
   listings,
   priceHistory,
+  scrapeRuns,
   seedMunicipalities,
   seedRegions,
   sql,
@@ -147,14 +149,16 @@ async function ingest(
   return { upserted: upserted.length, snapshots: newPriceRows.length };
 }
 
-async function main() {
-  const { pages, maxPrice } = parseCliArgs();
+async function executeRun(
+  db: Db,
+  pages: number,
+  maxPrice: number | undefined,
+): Promise<{ parsed: number; upserted: number; snapshots: number; deactivated: number }> {
   console.log(
     `[run] scraping standvirtual: pages=${pages}` +
       (maxPrice !== undefined ? ` maxPrice=${maxPrice}` : ""),
   );
 
-  const db = getDb();
   await seedRegions(db);
   await seedMunicipalities(db);
   const resolveRegion = await buildRegionResolver(db);
@@ -224,6 +228,56 @@ async function main() {
       `${totalSnapshots} price snapshots recorded, ` +
       `${deactivated} marked inactive (sold/removed)`,
   );
+
+  return { parsed: seen.size, upserted: totalUpserted, snapshots: totalSnapshots, deactivated };
+}
+
+async function main() {
+  const { pages, maxPrice } = parseCliArgs();
+  const db = getDb();
+  const startedAt = new Date();
+
+  // Record the run up-front as 'running', so an in-progress run is visible and a
+  // hard crash (timeout/OOM that never reaches the catch) leaves a 'running' row
+  // rather than no trace at all.
+  const inserted = await db
+    .insert(scrapeRuns)
+    .values({ startedAt, status: "running", pagesRequested: pages })
+    .returning({ id: scrapeRuns.id });
+  const runId = inserted[0]!.id;
+
+  try {
+    const r = await executeRun(db, pages, maxPrice);
+    await db
+      .update(scrapeRuns)
+      .set({
+        finishedAt: new Date(),
+        status: "success",
+        parsed: r.parsed,
+        upserted: r.upserted,
+        snapshots: r.snapshots,
+        deactivated: r.deactivated,
+      })
+      .where(eq(scrapeRuns.id, runId));
+    // Retention: keep ~1 year of run history so the table stays bounded.
+    await db.delete(scrapeRuns).where(sql`${scrapeRuns.startedAt} < now() - interval '1 year'`);
+  } catch (err) {
+    // Flip the row to 'failed' with the error, so it surfaces in the history —
+    // then rethrow so CI still fails.
+    try {
+      await db
+        .update(scrapeRuns)
+        .set({
+          finishedAt: new Date(),
+          status: "failed",
+          error: String(err instanceof Error ? (err.stack ?? err.message) : err).slice(0, 2000),
+        })
+        .where(eq(scrapeRuns.id, runId));
+    } catch (recErr) {
+      console.error("[run] could not record failed run:", recErr);
+    }
+    throw err;
+  }
 }
 
 main().catch((err) => {
