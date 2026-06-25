@@ -226,6 +226,50 @@ select {
   font-weight: 600;
 }
 
+/* ---- login gate ---- */
+.login-main {
+  min-height: 78vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 16px;
+}
+.login-card {
+  width: 100%;
+  max-width: 340px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.login-brand {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 600;
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.login-brand .hl {
+  color: var(--accent);
+}
+.login-sub {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0;
+}
+.login-error {
+  font-size: 13px;
+  color: var(--red);
+  margin: 0;
+}
+.login-card .btn {
+  width: 100%;
+  justify-content: center;
+}
+
 /* ---- scrape-run status pills ---- */
 .run-status {
   display: inline-block;

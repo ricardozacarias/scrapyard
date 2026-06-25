@@ -11,16 +11,25 @@ listings into Neon Postgres and serves a public Next.js dashboard.
 - `apps/scraper` — cheerio scraper + ingest CLI (run locally or via GitHub Actions cron)
 - `apps/web` — Next.js (App Router) dashboard, deployed on Vercel
 
-`DATABASE_URL` is the single config value everything needs. It is the **only**
-env var to set in Vercel / GitHub Actions secrets. It is read server-side only
-(`packages/db/client.ts`) and never reaches the browser bundle.
+`DATABASE_URL` is the core config value everything needs — read server-side only
+(`packages/db/client.ts`), never in the browser bundle. It's the only var the
+scraper / migrations / GitHub Actions need.
+
+`APP_PASSWORD` (web app only, optional) gates the whole site behind a single
+login page. When set as a Vercel env var, `middleware.ts` redirects every page
+(except `/login` + static assets) to `/login`, which checks the password and
+sets an httpOnly auth cookie. When unset, the gate is off and the site is public.
 
 ## Data exposure — deliberate decisions (read before changing the web app)
 
-The deployed site is **intentionally public with no authentication**. The owner
-is fine with people *viewing* stats and analysis, but **not** with anyone being
-able to bulk-download the scraped dataset (it represents real scraping effort).
-The web app is built to that line:
+A password gate (`APP_PASSWORD` + `middleware.ts` + `/login`) now exists: when
+`APP_PASSWORD` is set in Vercel, the **entire app** (dashboard, `/listings`,
+`/analysis`, `/runs`) sits behind one shared-password login. When it's unset the
+site is fully public. Either way the data-exposure rules below still hold — they
+govern what's safe to ship *to whoever can see the page*, gated or not. The owner
+is fine with permitted viewers *seeing* stats and analysis, but **not** with
+anyone being able to bulk-download the scraped dataset (it represents real
+scraping effort). The web app is built to that line:
 
 - **No bulk JSON API.** There is deliberately no `/api/*` route. A
   `GET /api/listings` endpoint used to exist and was **removed** because it let
