@@ -1,5 +1,7 @@
 import { getScrapeActivity, getScrapeRuns } from "@/lib/queries";
 
+import TriggerScrape from "./TriggerScrape";
+
 export const dynamic = "force-dynamic";
 
 function fmtDateTime(d: Date | string): string {
@@ -22,6 +24,15 @@ export default async function RunsPage() {
       <p className="subtitle">
         History of the daily scraper cron (05:30 UTC). Recorded in the database — no GitHub needed.
       </p>
+
+      <div className="panel">
+        <h2>Trigger a scrape</h2>
+        <p className="muted" style={{ marginTop: -6, marginBottom: 12, fontSize: 12 }}>
+          Manually start a full-catalog scrape on GitHub Actions. Requires the admin secret, and
+          refuses if a run is already queued or in progress.
+        </p>
+        <TriggerScrape />
+      </div>
 
       <div className="panel">
         <h2>Recent runs</h2>
