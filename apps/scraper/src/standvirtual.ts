@@ -419,8 +419,33 @@ export async function scrape(opts: ScrapeOptions): Promise<ParsedListing[]> {
     }
   };
 
+  // A page that hard-fails after fetchHtml's own retries (a 502 spell or timeout
+  // on standvirtual's side) must NOT abort the whole run — skip it and carry on,
+  // losing ~one page of listings instead of every page after the last flush. But
+  // a long run of consecutive failures means the site is down or blocking us, so
+  // bail then. A good page clears the streak.
+  let consecutiveFailures = 0;
+  const MAX_CONSECUTIVE_FAILURES = 12;
+
   for (let page = 1; page <= pages; page++) {
-    let recs = parsePage(await fetchHtml(maxPrice, page));
+    let html: string;
+    try {
+      html = await fetchHtml(maxPrice, page);
+    } catch (err) {
+      consecutiveFailures += 1;
+      console.warn(
+        `[scrape] page ${page}: hard fetch failure after retries (${String(err)}); skipping`,
+      );
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        throw new Error(
+          `Aborting after ${MAX_CONSECUTIVE_FAILURES} consecutive page failures — ` +
+            `standvirtual is likely down or blocking.`,
+        );
+      }
+      continue; // skip this page, keep going
+    }
+
+    let recs = parsePage(html);
 
     // A 200-OK anti-bot interstitial parses to 0 listings just like the genuine
     // end of results. Distinguish them by re-fetching: a transient block clears,
@@ -428,11 +453,17 @@ export async function scrape(opts: ScrapeOptions): Promise<ParsedListing[]> {
     for (let retry = 0; recs.length === 0 && retry < 2; retry++) {
       console.warn(`[scrape] page ${page}: 0 parsed; re-fetching (${retry + 1}/2)`);
       await sleep(2000 + Math.random() * 2000);
-      recs = parsePage(await fetchHtml(maxPrice, page));
+      try {
+        recs = parsePage(await fetchHtml(maxPrice, page));
+      } catch (err) {
+        console.warn(`[scrape] page ${page}: re-fetch failed (${String(err)})`);
+      }
     }
 
     console.log(`[scrape] page ${page}/${pages}: ${recs.length} listings`);
     if (recs.length === 0) break; // still empty after retries → past the last page
+
+    consecutiveFailures = 0; // a good page clears the failure streak
 
     if (onFlush) {
       buffer.push(...recs);
