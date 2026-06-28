@@ -102,7 +102,7 @@ export default function Gauge({
 
   return (
     <div className="gauge-wrap">
-      <svg className="gauge" viewBox="0 0 240 168" role="img" aria-label={`${label}: ${display} ${unit ?? ""}`}>
+      <svg className="gauge" viewBox="10 24 220 140" role="img" aria-label={`${label}: ${display} ${unit ?? ""}`}>
         {/* recessed dark face */}
         <path d={`${arcPath(R + 15, 180, 0)} Z`} fill="var(--gauge-face)" />
         {/* base track (blends with the face; shows only under the rounded band ends) */}
