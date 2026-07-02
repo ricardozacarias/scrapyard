@@ -1,7 +1,9 @@
 import MapExplorer from "@/components/MapExplorer";
-import { formatPrice } from "@/lib/format";
+import { getFairPriceData } from "@/lib/fair-price";
+import { formatNumber, formatPrice } from "@/lib/format";
 import { getAnalysisRows, getBiggestPriceDrops, getMapData } from "@/lib/queries";
 
+import FairPriceExplorer from "./fair-price-explorer";
 import Scatter from "./scatter";
 import SectionNav, { type Section } from "./section-nav";
 
@@ -10,14 +12,16 @@ export const dynamic = "force-dynamic";
 const SECTIONS: Section[] = [
   { id: "geography", label: "Geography" },
   { id: "correlations", label: "Correlations" },
+  { id: "fair-price", label: "Fair price" },
   { id: "movers", label: "Movers" },
 ];
 
 export default async function AnalysisPage() {
-  const [rows, drops, mapData] = await Promise.all([
+  const [rows, drops, mapData, fairPrice] = await Promise.all([
     getAnalysisRows({}, 5000),
     getBiggestPriceDrops(20),
     getMapData(),
+    getFairPriceData(),
   ]);
 
   const points = rows.map((r) => ({
@@ -73,6 +77,81 @@ export default async function AnalysisPage() {
             </header>
             <div className="panel">
               <Scatter data={points} />
+            </div>
+          </section>
+
+          <section id="fair-price" className="report-section">
+            <header className="section-head">
+              <span className="kicker">Fair price</span>
+              <h2>Depreciation &amp; the best deals right now</h2>
+              <p className="takeaway">
+                A per-model regression (price vs. age, mileage and power, fitted on{" "}
+                {formatNumber(fairPrice.covered)} of {formatNumber(fairPrice.universe)} active
+                listings across {fairPrice.models.length} models) puts a fair price on every car.
+                Compare how models hold value, then see the listings furthest below their fair
+                price.
+              </p>
+            </header>
+            <div className="panel">
+              <FairPriceExplorer models={fairPrice.models} />
+            </div>
+
+            <div className="panel" style={{ marginTop: 16 }}>
+              <h3 style={{ marginTop: 0 }}>Top deals — 2018+, ≥ €8k, ≤ 180k km</h3>
+              <p className="muted">
+                Active listings priced furthest below the model&apos;s fair value, in euros.
+                Discounts above 60% are excluded (usually damage or data errors), and identical
+                re-posts are collapsed. &quot;SV says&quot; is standvirtual&apos;s own rating —{" "}
+                {fairPrice.validation.length > 0
+                  ? `across all scored listings the two agree: ${fairPrice.validation
+                      .map((v) => `${v.bucket} ads score ${v.medianDiscountPct > 0 ? "+" : ""}${v.medianDiscountPct}%`)
+                      .join(", ")} vs. fair price.`
+                  : ""}
+              </p>
+              {fairPrice.deals.length === 0 ? (
+                <p className="muted">No qualifying deals right now.</p>
+              ) : (
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Title</th>
+                      <th>Model</th>
+                      <th className="num">Year</th>
+                      <th className="num">Km</th>
+                      <th className="num">Price</th>
+                      <th className="num">Fair price</th>
+                      <th className="num">Below fair</th>
+                      <th>SV says</th>
+                      <th>District</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fairPrice.deals.map((d, i) => (
+                      <tr key={`${d.key}-${d.year}-${d.km}-${d.price}-${i}`}>
+                        <td>
+                          {d.url ? (
+                            <a href={d.url} target="_blank" rel="noreferrer">
+                              {d.title ?? "(untitled)"}
+                            </a>
+                          ) : (
+                            (d.title ?? "(untitled)")
+                          )}
+                        </td>
+                        <td>{d.key}</td>
+                        <td className="num">{d.year}</td>
+                        <td className="num">{formatNumber(d.km)}</td>
+                        <td className="num">{formatPrice(d.price, "EUR")}</td>
+                        <td className="num">{formatPrice(d.expected, "EUR")}</td>
+                        <td className="num drop">
+                          −{formatPrice(d.saved, "EUR")} ({d.discountPct.toFixed(0)}%)
+                        </td>
+                        <td>{d.svSays ?? "—"}</td>
+                        <td>{d.district ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </section>
 

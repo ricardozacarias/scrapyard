@@ -18,6 +18,7 @@ export {
   gte,
   ilike,
   inArray,
+  isNotNull,
   like,
   lte,
   max,

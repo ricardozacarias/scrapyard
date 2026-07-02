@@ -53,6 +53,11 @@ scraping effort). The web app is built to that line:
   not add identifying fields to `MapPayload`.
 - **Aggregates are fine to expose.** `getSummary` / price-drop queries return
   medians, counts, and a top-20 list — safe to keep public.
+- **The fair-price model (`apps/web/lib/fair-price.ts`) splits along the same
+  line.** Per-model depreciation stats + retention curves are aggregates and are
+  passed to the client explorer. The `deals` rows carry `title`/`url` and must
+  only ever be **server-rendered, top-N** (like the Movers table) — never passed
+  to a client component or returned in bulk.
 
 ### Open item / TODO (pinned)
 
