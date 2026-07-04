@@ -82,6 +82,9 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
     const xLabel = FIELDS.find((f) => f.key === xKey)?.label ?? xKey;
     const yLabel = FIELDS.find((f) => f.key === yKey)?.label ?? yKey;
 
+    // Plot's default tip is white; with the figure's light currentColor text
+    // that's white-on-white on our dark theme. Dark tip background fixes it.
+    const tip = { fill: "#14140f", stroke: "#3f3f35" };
     const marks: Plot.Markish[] = [
       Plot.dot(normal, {
         x: "x",
@@ -90,7 +93,7 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
         fillOpacity: 0.6,
         r: 3,
         title: "label",
-        tip: true,
+        tip,
       }),
       Plot.dot(outliers, {
         x: "x",
@@ -98,7 +101,7 @@ export default function Scatter({ data }: { data: ScatterPoint[] }) {
         fill: "#ff3340",
         r: 4,
         title: "label",
-        tip: true,
+        tip,
       }),
     ];
 

@@ -12,14 +12,16 @@ import { and, eq, getDb, gte, isNotNull, listings, lte, regions } from "@scrapya
 // residual is the deal score. Prototyped in apps/analysis/scripts/fair-price.ts.
 //
 // Data exposure (see CLAUDE.md): everything in `models` / `validation` is an
-// aggregate and safe to ship to the client. `deals` rows carry title/url and
-// must only ever be server-rendered (top-N, like the Movers table) — never
-// passed into a client component or serialized in bulk.
+// aggregate and safe to ship to the client. Deal rows carry title/url; they
+// leave the server only through `queryDeals` (called by the fetchDeals server
+// action), which always returns a filtered top-N (DEAL_LIMIT) — never the pool.
+// Don't raise the cap or add pagination to it.
 
 const MIN_COHORT = 40; // listings needed to fit a per-model regression
 const MIN_R2 = 0.5; // below this the "fair price" isn't trustworthy
 const PREDICTORS = 5; // [1, age, age^2, km10k, power]
 const KM_PER_YEAR = 15_000; // mileage assumption for the retention curves
+const DEAL_LIMIT = 25; // hard cap on rows returned per deals query
 
 /** Client-safe per-model aggregates (no listing identities). */
 export interface FairPriceModel {
@@ -54,9 +56,27 @@ export interface FairPriceData {
   universe: number; // active priced listings considered
   covered: number; // listings in a usable cohort
   models: FairPriceModel[]; // sorted by cohort size desc
-  deals: FairPriceDeal[]; // "quality" cut, by € below fair value
   validation: { bucket: string; n: number; medianDiscountPct: number }[];
   fittedAt: string; // ISO timestamp of the cached fit
+}
+
+export interface DealFilter {
+  models?: string[]; // FairPriceModel keys; empty/undefined = all
+  minPrice?: number;
+  maxPrice?: number;
+  minYear?: number;
+  maxKm?: number;
+  sortBy?: "saved" | "discountPct";
+}
+
+/** Default cut: newer/higher-value cars, where the model is most trustworthy. */
+export function defaultDealFilter(): DealFilter {
+  return {
+    minPrice: 8_000,
+    minYear: new Date().getFullYear() - 8,
+    maxKm: 180_000,
+    sortBy: "saved",
+  };
 }
 
 interface Car {
@@ -178,7 +198,13 @@ function yearlyDrop(fit: Fit, a: number): number {
   return 1 - Math.exp(fit.beta[1]! + fit.beta[2]! * (2 * a + 1));
 }
 
-async function compute(): Promise<FairPriceData> {
+interface FitResult {
+  data: FairPriceData;
+  /** Full deduped pool of scored deals — server memory only, never shipped. */
+  allDeals: FairPriceDeal[];
+}
+
+async function compute(): Promise<FitResult> {
   const db = getDb();
   const currentYear = new Date().getFullYear();
 
@@ -298,20 +324,13 @@ async function compute(): Promise<FairPriceData> {
   }
 
   // The same physical car is often posted more than once — collapse dupes.
-  // Cheap old high-mileage cars dominate the raw %-discount list (the "discount"
-  // is usually unobserved condition), so the surfaced cut is newer/higher-value,
-  // ranked by absolute € below fair value.
   const seen = new Set<string>();
-  const deals = allDeals
-    .filter((d) => {
-      const k = `${d.key}|${d.year}|${d.km}|${d.price}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    })
-    .filter((d) => d.price >= 8_000 && d.year >= currentYear - 8 && d.km <= 180_000)
-    .sort((a, b) => b.saved - a.saved)
-    .slice(0, 25);
+  const deduped = allDeals.filter((d) => {
+    const k = `${d.key}|${d.year}|${d.km}|${d.price}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 
   const validation = [...byEval.entries()]
     .map(([bucket, discounts]) => ({
@@ -322,32 +341,60 @@ async function compute(): Promise<FairPriceData> {
     .sort((a, b) => b.medianDiscountPct - a.medianDiscountPct);
 
   return {
-    universe: rows.length,
-    covered: usable.reduce((a, [k]) => a + cohorts.get(k)!.length, 0),
-    models,
-    deals,
-    validation,
-    fittedAt: new Date().toISOString(),
+    data: {
+      universe: rows.length,
+      covered: usable.reduce((a, [k]) => a + cohorts.get(k)!.length, 0),
+      models,
+      validation,
+      fittedAt: new Date().toISOString(),
+    },
+    allDeals: deduped,
   };
 }
 
 // The fit reads ~45k rows and data only changes once a day (daily cron), so
 // memoize per server instance with a TTL instead of hitting Neon per request.
-let cached: { at: number; data: FairPriceData } | null = null;
-let inflight: Promise<FairPriceData> | null = null;
+let cached: { at: number; result: FitResult } | null = null;
+let inflight: Promise<FitResult> | null = null;
 const TTL_MS = 30 * 60 * 1000;
 
-export async function getFairPriceData(): Promise<FairPriceData> {
-  if (cached && Date.now() - cached.at < TTL_MS) return cached.data;
+async function getFit(): Promise<FitResult> {
+  if (cached && Date.now() - cached.at < TTL_MS) return cached.result;
   if (!inflight) {
     inflight = compute()
-      .then((data) => {
-        cached = { at: Date.now(), data };
-        return data;
+      .then((result) => {
+        cached = { at: Date.now(), result };
+        return result;
       })
       .finally(() => {
         inflight = null;
       });
   }
   return inflight;
+}
+
+export async function getFairPriceData(): Promise<FairPriceData> {
+  return (await getFit()).data;
+}
+
+/**
+ * Filtered top-N deals. The DEAL_LIMIT cap is the exposure boundary — callers
+ * (the fetchDeals server action) get at most one screenful per query, never
+ * the pool.
+ */
+export async function queryDeals(f: DealFilter): Promise<FairPriceDeal[]> {
+  const { allDeals } = await getFit();
+  const modelSet = f.models && f.models.length > 0 ? new Set(f.models) : null;
+  const sortBy = f.sortBy === "discountPct" ? "discountPct" : "saved";
+  return allDeals
+    .filter(
+      (d) =>
+        (!modelSet || modelSet.has(d.key)) &&
+        (f.minPrice === undefined || d.price >= f.minPrice) &&
+        (f.maxPrice === undefined || d.price <= f.maxPrice) &&
+        (f.minYear === undefined || d.year >= f.minYear) &&
+        (f.maxKm === undefined || d.km <= f.maxKm),
+    )
+    .sort((a, b) => b[sortBy] - a[sortBy])
+    .slice(0, DEAL_LIMIT);
 }

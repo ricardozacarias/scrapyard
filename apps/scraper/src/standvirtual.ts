@@ -427,6 +427,14 @@ export async function scrape(opts: ScrapeOptions): Promise<ParsedListing[]> {
   let consecutiveFailures = 0;
   const MAX_CONSECUTIVE_FAILURES = 12;
 
+  // Probe-ahead end-of-catalog detection. A soft-block interstitial can serve a
+  // mid-run page empty through all its re-fetches (2026-07-03: page 173 parsed 0
+  // three times in ~9s and truncated the run at 173/1343 while reporting
+  // success). So one empty page is treated as a skipped hiccup; only TWO
+  // consecutive empty pages mean the results genuinely ran out — the next loop
+  // iteration doubles as the probe. Costs one extra fetch at the true end.
+  let emptyStreak = 0;
+
   for (let page = 1; page <= pages; page++) {
     let html: string;
     try {
@@ -461,8 +469,17 @@ export async function scrape(opts: ScrapeOptions): Promise<ParsedListing[]> {
     }
 
     console.log(`[scrape] page ${page}/${pages}: ${recs.length} listings`);
-    if (recs.length === 0) break; // still empty after retries → past the last page
+    if (recs.length === 0) {
+      emptyStreak += 1;
+      if (emptyStreak >= 2) break; // two consecutive empty pages → past the last page
+      console.warn(
+        `[scrape] page ${page}: empty after retries — skipping; probing next page before ` +
+          `concluding end of catalog`,
+      );
+      continue;
+    }
 
+    emptyStreak = 0; // a page with listings proves we're not past the end
     consecutiveFailures = 0; // a good page clears the failure streak
 
     if (onFlush) {

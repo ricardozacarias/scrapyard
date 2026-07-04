@@ -55,9 +55,11 @@ scraping effort). The web app is built to that line:
   medians, counts, and a top-20 list — safe to keep public.
 - **The fair-price model (`apps/web/lib/fair-price.ts`) splits along the same
   line.** Per-model depreciation stats + retention curves are aggregates and are
-  passed to the client explorer. The `deals` rows carry `title`/`url` and must
-  only ever be **server-rendered, top-N** (like the Movers table) — never passed
-  to a client component or returned in bulk.
+  passed to the client explorer. Deal rows carry `title`/`url` and leave the
+  server only via the `fetchDeals` server action → `queryDeals`, which returns a
+  **filtered top-N (`DEAL_LIMIT`, 25)** per request — same per-ad exposure class
+  as the Movers table / `/listings`, effortful to bulk-scrape. Don't raise the
+  cap, add pagination/offsets, or expose the unfiltered pool.
 
 ### Open item / TODO (pinned)
 

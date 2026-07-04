@@ -1,5 +1,5 @@
 import MapExplorer from "@/components/MapExplorer";
-import { getFairPriceData } from "@/lib/fair-price";
+import { defaultDealFilter, getFairPriceData, queryDeals } from "@/lib/fair-price";
 import { formatNumber, formatPrice } from "@/lib/format";
 import { getAnalysisRows, getBiggestPriceDrops, getMapData } from "@/lib/queries";
 
@@ -17,12 +17,18 @@ const SECTIONS: Section[] = [
 ];
 
 export default async function AnalysisPage() {
+  const dealFilter = defaultDealFilter();
   const [rows, drops, mapData, fairPrice] = await Promise.all([
     getAnalysisRows({}, 5000),
     getBiggestPriceDrops(20),
     getMapData(),
     getFairPriceData(),
   ]);
+  // The explorer pre-selects the six highest-volume models and the deals table
+  // follows that selection, so the initial deals must be the same cut (cheap:
+  // the fit is already cached by getFairPriceData above).
+  const initialSelection = fairPrice.models.slice(0, 6).map((m) => m.key);
+  const initialDeals = await queryDeals({ ...dealFilter, models: initialSelection });
 
   const points = rows.map((r) => ({
     make: r.make,
@@ -92,67 +98,20 @@ export default async function AnalysisPage() {
                 price.
               </p>
             </header>
-            <div className="panel">
-              <FairPriceExplorer models={fairPrice.models} />
-            </div>
-
-            <div className="panel" style={{ marginTop: 16 }}>
-              <h3 style={{ marginTop: 0 }}>Top deals — 2018+, ≥ €8k, ≤ 180k km</h3>
-              <p className="muted">
-                Active listings priced furthest below the model&apos;s fair value, in euros.
-                Discounts above 60% are excluded (usually damage or data errors), and identical
-                re-posts are collapsed. &quot;SV says&quot; is standvirtual&apos;s own rating —{" "}
-                {fairPrice.validation.length > 0
-                  ? `across all scored listings the two agree: ${fairPrice.validation
-                      .map((v) => `${v.bucket} ads score ${v.medianDiscountPct > 0 ? "+" : ""}${v.medianDiscountPct}%`)
-                      .join(", ")} vs. fair price.`
-                  : ""}
-              </p>
-              {fairPrice.deals.length === 0 ? (
-                <p className="muted">No qualifying deals right now.</p>
-              ) : (
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Title</th>
-                      <th>Model</th>
-                      <th className="num">Year</th>
-                      <th className="num">Km</th>
-                      <th className="num">Price</th>
-                      <th className="num">Fair price</th>
-                      <th className="num">Below fair</th>
-                      <th>SV says</th>
-                      <th>District</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {fairPrice.deals.map((d, i) => (
-                      <tr key={`${d.key}-${d.year}-${d.km}-${d.price}-${i}`}>
-                        <td>
-                          {d.url ? (
-                            <a href={d.url} target="_blank" rel="noreferrer">
-                              {d.title ?? "(untitled)"}
-                            </a>
-                          ) : (
-                            (d.title ?? "(untitled)")
-                          )}
-                        </td>
-                        <td>{d.key}</td>
-                        <td className="num">{d.year}</td>
-                        <td className="num">{formatNumber(d.km)}</td>
-                        <td className="num">{formatPrice(d.price, "EUR")}</td>
-                        <td className="num">{formatPrice(d.expected, "EUR")}</td>
-                        <td className="num drop">
-                          −{formatPrice(d.saved, "EUR")} ({d.discountPct.toFixed(0)}%)
-                        </td>
-                        <td>{d.svSays ?? "—"}</td>
-                        <td>{d.district ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
+            <FairPriceExplorer
+              models={fairPrice.models}
+              initialSelection={initialSelection}
+              initialDeals={initialDeals}
+              initialFilter={dealFilter}
+            />
+            <p className="muted" style={{ marginTop: 10 }}>
+              &quot;SV says&quot; is standvirtual&apos;s own price rating —{" "}
+              {fairPrice.validation.length > 0
+                ? `across all scored listings the two agree: ${fairPrice.validation
+                    .map((v) => `${v.bucket} ads score ${v.medianDiscountPct > 0 ? "+" : ""}${v.medianDiscountPct}%`)
+                    .join(", ")} vs. fair price.`
+                : ""}
+            </p>
           </section>
 
           <section id="movers" className="report-section">
