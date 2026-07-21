@@ -6,10 +6,13 @@
 // regression in log-price space:
 //
 //   log(price) = b0 + b1*age + b2*age^2 + b3*(mileage/10k) + b4*(power/100)
+//              + b5*diesel + b6*electrified
 //
-// with a robust second pass (refit after dropping >3-sigma residuals, sigma
-// estimated via MAD). The fitted value is a median "fair price" for those
-// variables; the residual is the deal score (positive = cheaper than expected).
+// (fuel dummies centered per cohort; tiny ridge on the non-intercept diagonal
+// so single-fuel cohorts — e.g. all-electric models — stay solvable) with a
+// robust second pass (refit after dropping >3-sigma residuals, sigma estimated
+// via MAD). The fitted value is a median "fair price" for those variables; the
+// residual is the deal score (positive = cheaper than expected).
 //
 // Outputs to out/:
 //   depreciation-by-model.csv  per-model depreciation rates + fit quality
@@ -31,6 +34,7 @@ import {
   isNotNull,
   listings,
   lte,
+  or,
   printTable,
   save,
   sql,
@@ -39,7 +43,15 @@ import {
 const CURRENT_YEAR = 2026;
 const MIN_COHORT = 40; // listings needed to fit a per-model regression
 const MIN_R2 = 0.5; // below this the "fair price" isn't trustworthy
-const PREDICTORS = 5; // [1, age, age^2, km10k, power]
+const PREDICTORS = 7; // [1, age, age^2, km10k, power, diesel, electrified]
+const RIDGE = 1e-6; // keeps degenerate (e.g. single-fuel) cohorts solvable
+
+const ELECTRIFIED = new Set([
+  "Elétrico",
+  "Híbrido Plug-In",
+  "Híbrido (Gasolina)",
+  "Híbrido (Diesel)",
+]);
 
 interface Car {
   id: number;
@@ -55,11 +67,14 @@ interface Car {
   sellerType: string | null;
   priceEvaluation: string | null;
   region: string | null;
+  isActive: boolean;
 }
 
 interface Fit {
   beta: number[];
   medianPower: number;
+  dieselShare: number; // cohort fuel mix, for centering the dummies
+  elecShare: number;
   r2: number;
   sigma: number; // residual std-dev of the robust (kept) set, in log space
   n: number; // cohort size
@@ -88,7 +103,8 @@ function solve(A: number[][], b: number[]): number[] | null {
   return M.map((row, i) => row[n]! / row[i]!);
 }
 
-/** OLS of y on X via normal equations. Returns beta or null if singular. */
+/** OLS of y on X via normal equations, with a tiny ridge on the non-intercept
+ *  diagonal so constant (centered-to-zero) columns don't make XtX singular. */
 function ols(X: number[][], y: number[]): number[] | null {
   const k = X[0]!.length;
   const XtX = Array.from({ length: k }, () => new Array<number>(k).fill(0));
@@ -101,6 +117,7 @@ function ols(X: number[][], y: number[]): number[] | null {
     }
   }
   for (let a = 0; a < k; a++) for (let b = 0; b < a; b++) XtX[a]![b] = XtX[b]![a]!;
+  for (let a = 1; a < k; a++) XtX[a]![a]! += RIDGE;
   return solve(XtX, Xty);
 }
 
@@ -110,9 +127,21 @@ function median(xs: number[]): number {
   return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
 }
 
-function designRow(car: Car, medianPower: number): number[] {
+function fuelFlags(fuel: string | null): { diesel: number; elec: number } {
+  if (fuel === "Diesel") return { diesel: 1, elec: 0 };
+  if (fuel && ELECTRIFIED.has(fuel)) return { diesel: 0, elec: 1 };
+  return { diesel: 0, elec: 0 }; // petrol / LPG / CNG / unknown = baseline
+}
+
+function designRow(
+  car: Car,
+  medianPower: number,
+  dieselShare: number,
+  elecShare: number,
+): number[] {
   const pw = ((car.power ?? medianPower) - medianPower) / 100; // centered → missing ⇒ 0
-  return [1, car.age, car.age * car.age, car.km10k, pw];
+  const f = fuelFlags(car.fuel);
+  return [1, car.age, car.age * car.age, car.km10k, pw, f.diesel - dieselShare, f.elec - elecShare];
 }
 
 function predictLogPrice(fit: Fit, row: number[]): number {
@@ -122,8 +151,10 @@ function predictLogPrice(fit: Fit, row: number[]): number {
 /** Fit one cohort: OLS, then refit without >3-sigma outliers (MAD-based). */
 function fitCohort(cars: Car[]): Fit | null {
   const medianPower = median(cars.filter((c) => c.power != null).map((c) => c.power!)) || 0;
+  const dieselShare = cars.reduce((a, c) => a + fuelFlags(c.fuel).diesel, 0) / cars.length;
+  const elecShare = cars.reduce((a, c) => a + fuelFlags(c.fuel).elec, 0) / cars.length;
   const build = (set: Car[]) => ({
-    X: set.map((c) => designRow(c, medianPower)),
+    X: set.map((c) => designRow(c, medianPower, dieselShare, elecShare)),
     y: set.map((c) => Math.log(c.price)),
   });
 
@@ -155,6 +186,8 @@ function fitCohort(cars: Car[]): Fit | null {
   return {
     beta,
     medianPower,
+    dieselShare,
+    elecShare,
     r2: 1 - ssRes / ssTot,
     sigma: Math.sqrt(ssRes / Math.max(1, y.length - PREDICTORS)),
     n: cars.length,
@@ -188,11 +221,17 @@ async function main() {
       sellerType: listings.sellerType,
       priceEvaluation: listings.priceEvaluation,
       region: listings.region,
+      isActive: listings.isActive,
     })
     .from(listings)
     .where(
       and(
-        eq(listings.isActive, true),
+        // Fit on the live market plus recently-delisted cars (their final ask
+        // approximates a market-clearing price); deals stay active-only.
+        or(
+          eq(listings.isActive, true),
+          gte(listings.lastSeenAt, new Date(Date.now() - 60 * 86_400_000)),
+        ),
         isNotNull(listings.make),
         isNotNull(listings.model),
         isNotNull(listings.modelYear),
@@ -220,8 +259,12 @@ async function main() {
     sellerType: r.sellerType,
     priceEvaluation: r.priceEvaluation,
     region: r.region,
+    isActive: r.isActive,
   }));
-  console.log(`universe: ${cars.length} active priced listings`);
+  const activeN = cars.filter((c) => c.isActive).length;
+  console.log(
+    `universe: ${cars.length} recent priced listings (${activeN} active + ${cars.length - activeN} recently sold)`,
+  );
 
   const cohorts = new Map<string, Car[]>();
   for (const c of cars) {
@@ -268,7 +311,7 @@ async function main() {
   for (const key of topModels) {
     const f = fits.get(key)!;
     const at = (age: number) =>
-      predictLogPrice(f, [1, age, age * age, (1.5 * age * 10_000) / 10_000, 0]);
+      predictLogPrice(f, [1, age, age * age, (1.5 * age * 10_000) / 10_000, 0, 0, 0]);
     const base = at(1);
     for (let age = 1; age <= Math.min(12, f.maxAge); age++) {
       curvePts.push({ model: key, age, retention: 100 * Math.exp(at(age) - base) });
@@ -291,9 +334,11 @@ async function main() {
   const deals: Record<string, unknown>[] = [];
   for (const [key, f] of usable) {
     for (const c of cohorts.get(key)!) {
+      // Deals must be buyable: delisted cars inform the fit, not the list.
+      if (!c.isActive) continue;
       // Stay inside the fit's support — no extrapolated "fair prices".
       if (c.age > f.maxAge || c.km10k > f.maxKm10k) continue;
-      const expected = Math.exp(predictLogPrice(f, designRow(c, f.medianPower)));
+      const expected = Math.exp(predictLogPrice(f, designRow(c, f.medianPower, f.dieselShare, f.elecShare)));
       const discount = 1 - c.price / expected;
       // <15% isn't a deal; >60% below fair is salvage/scam/typo territory.
       if (discount < 0.15 || discount > 0.6) continue;
@@ -352,7 +397,7 @@ async function main() {
   for (const [key, f] of usable) {
     for (const c of cohorts.get(key)!) {
       if (!c.priceEvaluation || c.age > f.maxAge || c.km10k > f.maxKm10k) continue;
-      const expected = Math.exp(predictLogPrice(f, designRow(c, f.medianPower)));
+      const expected = Math.exp(predictLogPrice(f, designRow(c, f.medianPower, f.dieselShare, f.elecShare)));
       const bucket = byEval.get(c.priceEvaluation) ?? [];
       bucket.push(100 * (1 - c.price / expected));
       byEval.set(c.priceEvaluation, bucket);

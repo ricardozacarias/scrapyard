@@ -356,6 +356,40 @@ select {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+/* database-storage panel: gauge on the left, stat list on the right */
+.storage-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: 20px;
+  align-items: center;
+}
+.storage-stats {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+.storage-stats > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.storage-stats dt {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.storage-stats dd {
+  margin: 0;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 560px) {
+  .storage-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* small "?" info dot with a hover/focus tooltip — used in gauges and stat tiles */
 .info-dot {
   position: relative;

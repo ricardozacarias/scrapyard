@@ -36,6 +36,13 @@
       "when": 1782205949200,
       "tag": "0004_jittery_absorbing_man",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784655470013,
+      "tag": "0005_nappy_blazing_skull",
+      "breakpoints": true
     }
   ]
 }

@@ -549,6 +549,113 @@ export async function getScrapeActivity(days = 14): Promise<DayActivity[]> {
   return rowsOf<DayActivity>(res);
 }
 
+/**
+ * Neon Free plan storage cap: 0.5 GB per project. This is the binding, cumulative
+ * limit for a scrape dataset that only grows (sold cars are kept, price history is
+ * append-only). Compute-hours / egress are the *other* free-tier limits but aren't
+ * visible from inside Postgres — they'd need the Neon API. If Neon changes the
+ * plan, update this one constant.
+ */
+export const NEON_FREE_STORAGE_BYTES = 512 * 1024 * 1024;
+
+export interface StorageUsage {
+  currentBytes: number;
+  capBytes: number;
+  pct: number; // 0–100, clamped
+  /** Per-table breakdown, largest first. */
+  tables: { table: string; bytes: number }[];
+  growthBytesPerDay: number;
+  /** "measured" once ≥2 runs recorded db_bytes ≥1 day apart; else "estimated" from row growth. */
+  growthSource: "measured" | "estimated";
+  daysToFull: number | null; // null when growth ≤ 0
+  projectedFullISO: string | null;
+}
+
+/**
+ * Storage usage vs the Neon free-tier cap, plus a growth-based projection of when
+ * we'll hit it. Growth is *measured* from recorded db_bytes deltas once we have
+ * two runs a day apart; until then it falls back to an *estimate* from row growth
+ * (new listings + price snapshots over the last 14 days × bytes-per-row).
+ */
+export async function getStorageUsage(): Promise<StorageUsage> {
+  const db = getDb();
+
+  const [{ bytes: currentBytes }] = rowsOf<{ bytes: number }>(
+    await db.execute(sql`SELECT pg_database_size(current_database())::bigint AS bytes`),
+  ).map((r) => ({ bytes: Number(r.bytes) }));
+
+  const tables = rowsOf<{ table: string; bytes: string }>(
+    await db.execute(sql`
+      SELECT c.relname AS "table", pg_total_relation_size(c.oid)::bigint AS bytes
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind = 'r' AND n.nspname = 'public'
+      ORDER BY pg_total_relation_size(c.oid) DESC`),
+  ).map((r) => ({ table: r.table, bytes: Number(r.bytes) }));
+
+  // Measured growth: earliest vs latest recorded db_bytes, spanning ≥1 day.
+  const recorded = rowsOf<{ at: string; bytes: string }>(
+    await db.execute(sql`
+      SELECT started_at AS at, db_bytes AS bytes
+      FROM scrape_runs
+      WHERE db_bytes IS NOT NULL
+      ORDER BY started_at ASC`),
+  ).map((r) => ({ at: new Date(r.at).getTime(), bytes: Number(r.bytes) }));
+
+  let growthBytesPerDay = 0;
+  let growthSource: "measured" | "estimated" = "estimated";
+  if (recorded.length >= 2) {
+    const first = recorded[0]!;
+    const last = recorded[recorded.length - 1]!;
+    const days = (last.at - first.at) / 86_400_000;
+    if (days >= 1) {
+      growthBytesPerDay = (last.bytes - first.bytes) / days;
+      growthSource = "measured";
+    }
+  }
+
+  // Fallback estimate: rows added/day (last 14d) × bytes-per-row (incl. indexes).
+  if (growthSource === "estimated") {
+    const [est] = rowsOf<{ per_day: number }>(
+      await db.execute(sql`
+        WITH lsz AS (
+          SELECT pg_total_relation_size('listings')::numeric
+                 / NULLIF(GREATEST((SELECT reltuples FROM pg_class WHERE relname='listings'), 1), 0) AS b
+        ),
+        psz AS (
+          SELECT pg_total_relation_size('price_history')::numeric
+                 / NULLIF(GREATEST((SELECT reltuples FROM pg_class WHERE relname='price_history'), 1), 0) AS b
+        ),
+        lday AS (
+          SELECT count(*)::numeric / 14 AS n FROM listings
+          WHERE first_seen_at >= now() - interval '14 days'
+        ),
+        pday AS (
+          SELECT count(*)::numeric / 14 AS n FROM price_history
+          WHERE observed_at >= now() - interval '14 days'
+        )
+        SELECT (SELECT n FROM lday) * (SELECT b FROM lsz)
+             + (SELECT n FROM pday) * (SELECT b FROM psz) AS per_day`),
+    ).map((r) => ({ per_day: Number(r.per_day) }));
+    growthBytesPerDay = est?.per_day ?? 0;
+  }
+
+  const remaining = NEON_FREE_STORAGE_BYTES - currentBytes;
+  const daysToFull = growthBytesPerDay > 0 ? remaining / growthBytesPerDay : null;
+  const projectedFullISO =
+    daysToFull !== null ? new Date(Date.now() + daysToFull * 86_400_000).toISOString() : null;
+
+  return {
+    currentBytes,
+    capBytes: NEON_FREE_STORAGE_BYTES,
+    pct: Math.min(100, Math.max(0, (currentBytes / NEON_FREE_STORAGE_BYTES) * 100)),
+    tables,
+    growthBytesPerDay,
+    growthSource,
+    daysToFull,
+    projectedFullISO,
+  };
+}
+
 /** Normalize neon-http execute() results to a plain row array. */
 function rowsOf<T>(res: unknown): T[] {
   if (Array.isArray(res)) return res as T[];

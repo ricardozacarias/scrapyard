@@ -248,6 +248,19 @@ async function main() {
 
   try {
     const r = await executeRun(db, pages, maxPrice);
+    // Capture total DB size for the storage-usage trend on /runs. Best-effort:
+    // a failure here must not fail an otherwise-successful scrape.
+    let dbBytes: number | null = null;
+    try {
+      const res = await db.execute<{ bytes: string }>(
+        sql`SELECT pg_database_size(current_database()) AS bytes`,
+      );
+      const rows = Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? []);
+      const raw = (rows[0] as { bytes?: string | number } | undefined)?.bytes;
+      dbBytes = raw != null ? Number(raw) : null;
+    } catch (sizeErr) {
+      console.warn("[run] could not read pg_database_size:", sizeErr);
+    }
     await db
       .update(scrapeRuns)
       .set({
@@ -257,6 +270,7 @@ async function main() {
         upserted: r.upserted,
         snapshots: r.snapshots,
         deactivated: r.deactivated,
+        dbBytes,
       })
       .where(eq(scrapeRuns.id, runId));
     // Retention: keep ~1 year of run history so the table stays bounded.

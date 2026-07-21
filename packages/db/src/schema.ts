@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  bigint,
   boolean,
   check,
   index,
@@ -136,6 +137,11 @@ export const scrapeRuns = pgTable(
     upserted: integer("upserted").notNull().default(0),
     snapshots: integer("snapshots").notNull().default(0),
     deactivated: integer("deactivated").notNull().default(0),
+    // Total logical database size (pg_database_size) captured at the end of each
+    // successful run, so the dashboard can trend storage vs the Neon free-tier cap
+    // and project when it runs out. Nullable: runs before this column, and failed
+    // runs, leave it unset. bigint since pg_database_size returns int8.
+    dbBytes: bigint("db_bytes", { mode: "number" }),
     error: text("error"),
   },
   (t) => [

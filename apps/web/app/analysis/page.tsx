@@ -91,9 +91,10 @@ export default async function AnalysisPage() {
               <span className="kicker">Fair price</span>
               <h2>Depreciation &amp; the best deals right now</h2>
               <p className="takeaway">
-                A per-model regression (price vs. age, mileage and power, fitted on{" "}
-                {formatNumber(fairPrice.covered)} of {formatNumber(fairPrice.universe)} active
-                listings across {fairPrice.models.length} models) puts a fair price on every car.
+                A per-model regression (price vs. age, mileage, power and fuel, fitted on{" "}
+                {formatNumber(fairPrice.covered)} of {formatNumber(fairPrice.universe)} recent
+                listings — active and recently sold — across {fairPrice.models.length} models)
+                puts a fair price on every car.
                 Compare how models hold value, then see the listings furthest below their fair
                 price.
               </p>
