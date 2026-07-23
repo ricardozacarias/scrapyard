@@ -92,6 +92,19 @@ function estimate(
   return { ...p, extrapolated: warnings.length > 0 ? warnings.join(" and ") : null };
 }
 
+interface Confidence {
+  level: "high" | "medium" | "low";
+  reason: string;
+}
+
+function confidenceFor(m: ValuationModel, e: Estimate, powerOutside: boolean): Confidence {
+  if (e.extrapolated || powerOutside) return { level: "low", reason: "inputs outside the fitted data" };
+  if (m.n < 60) return { level: "low", reason: "few comparable listings" };
+  if (m.r2 < 0.7) return { level: "low", reason: "prices vary a lot within this model" };
+  if (m.r2 >= 0.85 && m.n >= 150) return { level: "high", reason: "large sample, tight fit" };
+  return { level: "medium", reason: m.n < 150 ? "moderate sample" : "moderate fit" };
+}
+
 export default function ValuationTool({ models }: { models: ValuationModel[] }) {
   const makes = useMemo(() => [...new Set(models.map((m) => m.make))].sort(), [models]);
 
@@ -164,6 +177,58 @@ export default function ValuationTool({ models }: { models: ValuationModel[] }) 
         : 0,
     [points, year, fuel],
   );
+
+  /** Median asking price of the live same-year (and fuel) rivals. */
+  const peerMedian = useMemo(() => {
+    if (!points || year === "") return null;
+    const prices = points
+      .filter((p) => !p.sold && isPeer(p, Number(year), fuel))
+      .map((p) => p.price)
+      .sort((a, b) => a - b);
+    if (prices.length === 0) return null;
+    const m = prices.length >> 1;
+    return prices.length % 2 ? prices[m]! : (prices[m - 1]! + prices[m]!) / 2;
+  }, [points, year, fuel]);
+
+  /** Most common power figures for this model — autocomplete for the cv input. */
+  const commonPowers = useMemo(() => {
+    if (!points) return [];
+    const counts = new Map<number, number>();
+    for (const p of points) {
+      if (p.power != null) counts.set(p.power, (counts.get(p.power) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([v]) => v)
+      .sort((a, b) => a - b);
+  }, [points]);
+
+  const powerBounds = useMemo(() => {
+    if (!points) return null;
+    const ps = points.filter((p) => p.power != null).map((p) => p.power!);
+    return ps.length > 0 ? { min: Math.min(...ps), max: Math.max(...ps) } : null;
+  }, [points]);
+  const powerOutside =
+    powerVal !== undefined &&
+    powerBounds !== null &&
+    (powerVal < powerBounds.min * 0.85 || powerVal > powerBounds.max * 1.15);
+
+  const confidence = result && selected ? confidenceFor(selected, result, powerOutside) : null;
+  const fuelMixHint =
+    fuel === "unknown" && selected && (selected.dieselShare >= 0.15 || selected.elecShare >= 0.15);
+
+  const fillExample = () => {
+    if (models.length === 0) return;
+    const ex = models.reduce((a, b) => (b.n > a.n ? b : a), models[0]!);
+    const y = Math.max(ex.minYear, ex.maxYear - 5);
+    setMake(ex.make);
+    setModelKey(ex.key);
+    setYear(String(y));
+    setKm(String(Math.max(10_000, (new Date().getFullYear() - y) * 15_000)));
+    setFuel("unknown");
+    setPower("");
+  };
 
   // ── Scatter: the model's market cloud + fair-price curve + your car ──────
   useEffect(() => {
@@ -360,38 +425,95 @@ export default function ValuationTool({ models }: { models: ValuationModel[] }) 
             <input
               id="val-power"
               type="number"
+              list="val-powers"
               placeholder={selected ? `typical ${selected.medianPower}` : "—"}
               value={power}
               onChange={(e) => setPower(e.target.value)}
             />
+            <datalist id="val-powers">
+              {commonPowers.map((p) => (
+                <option key={p} value={p} />
+              ))}
+            </datalist>
           </div>
         </div>
 
-        {result && selected ? (
-          <div style={{ padding: "10px 4px 2px" }}>
-            <div style={{ fontSize: "2.2rem", fontWeight: 700 }}>
-              {formatPrice(Math.round(result.mid), "EUR")}
+        {result && selected && confidence ? (
+          <div className="val-result">
+            <div className="val-result-main">
+              <div className="val-price">
+                {formatPrice(Math.round(result.mid), "EUR")}
+                <span className={`val-badge ${confidence.level}`}>
+                  {confidence.level} confidence
+                </span>
+              </div>
+              <div className="val-range">
+                <div
+                  className="val-range-marker"
+                  style={{
+                    left: `${Math.min(98, Math.max(2, (100 * (result.mid - result.low)) / (result.high - result.low)))}%`,
+                  }}
+                />
+              </div>
+              <div className="val-range-labels">
+                <span>{formatPrice(Math.round(result.low), "EUR")}</span>
+                <span>fair range</span>
+                <span>{formatPrice(Math.round(result.high), "EUR")}</span>
+              </div>
             </div>
-            <p style={{ margin: "4px 0 0" }}>
-              Fair range {formatPrice(Math.round(result.low), "EUR")} –{" "}
-              {formatPrice(Math.round(result.high), "EUR")}
-            </p>
-            <p className="muted" style={{ marginTop: 8 }}>
-              Based on {formatNumber(selected.n)} recent {selected.key} listings — active and
-              recently sold (fit R² {selected.r2.toFixed(2)}).
-              {result.extrapolated
-                ? ` ⚠ Outside the data the model was fitted on — ${result.extrapolated} — so treat this as a rough extrapolation.`
-                : ""}
-            </p>
+            <div className="val-facts">
+              <span className="muted">
+                Based on {formatNumber(selected.n)} recent {selected.key} listings (fit R²{" "}
+                {selected.r2.toFixed(2)}) — {confidence.reason}.
+              </span>
+              <span className="muted">
+                {peerCount > 0 && peerMedian !== null ? (
+                  <>
+                    Direct competition: {peerCount} same-year
+                    {fuel !== "unknown" ? ", same-fuel" : ""} listing
+                    {peerCount === 1 ? "" : "s"}, median{" "}
+                    {formatPrice(Math.round(peerMedian), "EUR")}.
+                  </>
+                ) : points !== null ? (
+                  "No same-year listings on the market right now — less to haggle against."
+                ) : (
+                  "Loading market context…"
+                )}
+              </span>
+              {fuelMixHint && (
+                <span className="muted">
+                  Assumes this model&apos;s typical fuel mix — pick a fuel to sharpen the estimate.
+                </span>
+              )}
+              {result.extrapolated && (
+                <span style={{ color: "var(--gauge-mid)" }}>
+                  ⚠ Outside the fitted data ({result.extrapolated}) — treat as a rough
+                  extrapolation.
+                </span>
+              )}
+              {powerOutside && powerBounds && (
+                <span style={{ color: "var(--gauge-mid)" }}>
+                  ⚠ {powerVal} cv is outside the {powerBounds.min}–{powerBounds.max} cv seen for
+                  this model.
+                </span>
+              )}
+            </div>
           </div>
         ) : (
-          <p className="muted" style={{ marginTop: 4 }}>
-            {make === ""
-              ? "Pick a make to get started. Only models with at least 40 active listings can be valued."
-              : !modelKey
-                ? "Pick a model."
-                : "Pick the year and enter the mileage to get an estimate."}
-          </p>
+          <div style={{ marginTop: 4 }}>
+            <p className="muted">
+              {make === ""
+                ? "Pick a make to get started. Only models with at least 40 recent listings can be valued."
+                : !modelKey
+                  ? "Pick a model."
+                  : "Pick the year and enter the mileage to get an estimate."}
+            </p>
+            {make === "" && (
+              <button type="button" className="btn secondary" onClick={fillExample}>
+                Try an example
+              </button>
+            )}
+          </div>
         )}
       </div>
 

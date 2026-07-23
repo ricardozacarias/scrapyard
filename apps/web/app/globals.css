@@ -913,3 +913,82 @@ input[type="range"] {
   background: var(--orange);
   color: var(--accent-ink);
 }
+
+/* ── /value: valuation result ─────────────────────────────────────────────── */
+.val-result {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 12px 4px 4px;
+}
+.val-result-main {
+  flex: 1 1 340px;
+  min-width: 260px;
+}
+.val-price {
+  font-size: clamp(28px, 6vw, 42px);
+  font-weight: 700;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.val-badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  vertical-align: middle;
+  margin-left: 10px;
+}
+.val-badge.high {
+  background: color-mix(in srgb, var(--green) 22%, transparent);
+  color: var(--green);
+}
+.val-badge.medium {
+  background: color-mix(in srgb, var(--gauge-mid) 22%, transparent);
+  color: var(--gauge-mid);
+}
+.val-badge.low {
+  background: color-mix(in srgb, var(--red) 22%, transparent);
+  color: var(--red);
+}
+/* Range bar: track = the fair band (low → high), marker = the estimate. */
+.val-range {
+  position: relative;
+  height: 10px;
+  margin: 14px 0 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--accent) 18%, var(--panel-2)),
+    color-mix(in srgb, var(--accent) 55%, var(--panel-2)),
+    color-mix(in srgb, var(--accent) 18%, var(--panel-2))
+  );
+  border: 1px solid var(--border);
+}
+.val-range-marker {
+  position: absolute;
+  top: -4px;
+  width: 4px;
+  height: 18px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--bg);
+  transform: translateX(-50%);
+}
+.val-range-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.val-facts {
+  flex: 1 1 220px;
+  min-width: 200px;
+  font-size: 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
