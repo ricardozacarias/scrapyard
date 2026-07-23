@@ -279,7 +279,8 @@ export interface Summary {
    * Estimated cars that left the market yesterday: last seen during yesterday
    * but absent from the most recent scrape. A proxy — we can't observe actual
    * sales, only when an ad disappears — and the latest day is provisional until
-   * the absence is confirmed across further scrapes.
+   * the absence is confirmed across further scrapes. Ads later linked to a
+   * repost (relisted_from) are excluded retroactively: reposted ≠ sold.
    */
   soldYesterday: number;
   /** Listings standvirtual rates as priced below market ("good deal"). */
@@ -295,15 +296,19 @@ export async function getSummary(): Promise<Summary> {
     SELECT
       (SELECT count(*)::int FROM listings WHERE ${CONTINENTAL_SQL}) AS total,
       (SELECT count(DISTINCT listing_id)::int FROM price_history) AS "withPriceHistory",
+      -- reposts of an earlier ad (relisted_from set) aren't genuinely new supply
       (SELECT count(*)::int FROM listings
-         WHERE first_seen_at >= date_trunc('day', now()) AND ${CONTINENTAL_SQL}) AS "newToday",
+         WHERE first_seen_at >= date_trunc('day', now())
+           AND relisted_from IS NULL AND ${CONTINENTAL_SQL}) AS "newToday",
       -- left the market yesterday: last seen during yesterday, gone from the
-      -- latest scrape (a proxy for "sold" — see Summary.soldYesterday).
-      (SELECT count(*)::int FROM listings
-         WHERE last_seen_at >= date_trunc('day', now()) - interval '1 day'
-           AND last_seen_at <  date_trunc('day', now())
-           AND last_seen_at <  (SELECT max(last_seen_at) FROM listings WHERE ${CONTINENTAL_SQL})
-           AND ${CONTINENTAL_SQL}) AS "soldYesterday",
+      -- latest scrape (a proxy for "sold" — see Summary.soldYesterday). Ads with
+      -- a linked repost (see link-relists.ts) were not sold, just reposted.
+      (SELECT count(*)::int FROM listings l
+         WHERE l.last_seen_at >= date_trunc('day', now()) - interval '1 day'
+           AND l.last_seen_at <  date_trunc('day', now())
+           AND l.last_seen_at <  (SELECT max(last_seen_at) FROM listings WHERE ${CONTINENTAL_SQL})
+           AND NOT EXISTS (SELECT 1 FROM listings s WHERE s.relisted_from = l.id)
+           AND (l.region IS NULL OR l.region_id IS NOT NULL)) AS "soldYesterday",
       (SELECT count(*)::int FROM listings
          WHERE price_evaluation = 'BELOW' AND ${CONTINENTAL_SQL}) AS "belowMarket",
       (SELECT count(*)::int FROM listings
@@ -326,10 +331,12 @@ export async function getSummary(): Promise<Summary> {
 
   // Market heat = listings added in the last 24h ÷ trailing daily average over
   // the available window. ~1.0 means a typical day; >1 a busier-than-usual one.
+  // Reposts (relisted_from set) are excluded — they aren't new supply.
   const heatRows = await db.execute(sql`
     WITH fs AS (
       SELECT first_seen_at FROM listings
-      WHERE first_seen_at >= now() - interval '30 days' AND ${CONTINENTAL_SQL}
+      WHERE first_seen_at >= now() - interval '30 days'
+        AND relisted_from IS NULL AND ${CONTINENTAL_SQL}
     )
     SELECT
       (SELECT count(*)::int FROM fs WHERE first_seen_at >= now() - interval '24 hours') AS last24,

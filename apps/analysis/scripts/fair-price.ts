@@ -228,9 +228,14 @@ async function main() {
       and(
         // Fit on the live market plus recently-delisted cars (their final ask
         // approximates a market-clearing price); deals stay active-only.
+        // Delisted ads with a linked repost weren't sold — their successor
+        // already represents the car, so they're excluded entirely.
         or(
           eq(listings.isActive, true),
-          gte(listings.lastSeenAt, new Date(Date.now() - 60 * 86_400_000)),
+          and(
+            gte(listings.lastSeenAt, new Date(Date.now() - 60 * 86_400_000)),
+            sql`not exists (select 1 from listings s where s.relisted_from = ${listings.id})`,
+          ),
         ),
         isNotNull(listings.make),
         isNotNull(listings.model),

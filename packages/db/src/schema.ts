@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   check,
@@ -87,6 +88,18 @@ export const listings = pgTable(
       .notNull()
       .defaultNow(),
     isActive: boolean("is_active").notNull().default(true),
+    /**
+     * Relist linking (set by apps/scraper/src/link-relists.ts): when this ad is
+     * a repost of an earlier, now-delisted ad for the same physical car, it
+     * points at that predecessor. `relist_kind` says how they matched:
+     * 'relist' (same seller reposting), 'trade_in' (private car reappearing at
+     * a dealer), 'relocated' (same car, different city). A delisted ad with a
+     * successor should not be counted as a true sale.
+     */
+    relistedFrom: integer("relisted_from").references((): AnyPgColumn => listings.id, {
+      onDelete: "set null",
+    }),
+    relistKind: text("relist_kind"),
   },
   (t) => [
     index("listings_price_idx").on(t.currentPrice),
@@ -96,6 +109,16 @@ export const listings = pgTable(
     index("listings_region_id_idx").on(t.regionId),
     index("listings_municipality_id_idx").on(t.municipalityId),
     index("listings_last_seen_at_idx").on(t.lastSeenAt),
+    // One successor per predecessor (Postgres allows many NULLs here).
+    uniqueIndex("listings_relisted_from_key").on(t.relistedFrom),
+    check(
+      "listings_relist_kind_check",
+      sql`${t.relistKind} IS NULL OR ${t.relistKind} IN ('relist', 'trade_in', 'relocated')`,
+    ),
+    check(
+      "listings_relist_pair_check",
+      sql`(${t.relistedFrom} IS NULL) = (${t.relistKind} IS NULL)`,
+    ),
   ],
 );
 

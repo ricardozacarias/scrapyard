@@ -1,6 +1,6 @@
 import "server-only";
 
-import { and, eq, getDb, gte, isNotNull, listings, lte, or, regions } from "@scrapyard/db";
+import { and, eq, getDb, gte, isNotNull, listings, lte, or, regions, sql } from "@scrapyard/db";
 
 // Fair-price model: per (make, model) cohort with enough active listings, an
 // OLS hedonic regression in log-price space —
@@ -25,6 +25,9 @@ const MIN_R2 = 0.5; // below this the "fair price" isn't trustworthy
 // The fit also uses recently-delisted listings (their final ask is close to a
 // market-clearing price and counters the active pool's overpriced-cars-linger
 // bias), but only within this window so stale prices age out of the model.
+// Delisted ads with a linked repost (relisted_from — see link-relists.ts) are
+// excluded entirely: they weren't sold, and their successor already represents
+// the same physical car in the universe.
 const SOLD_WINDOW_DAYS = 60;
 const PREDICTORS = 7; // [1, age, age^2, km10k, power, diesel, electrified]
 const RIDGE = 1e-6; // keeps degenerate (e.g. single-fuel) cohorts solvable
@@ -316,7 +319,10 @@ async function compute(): Promise<FitResult> {
       and(
         or(
           eq(listings.isActive, true),
-          gte(listings.lastSeenAt, new Date(Date.now() - SOLD_WINDOW_DAYS * 86_400_000)),
+          and(
+            gte(listings.lastSeenAt, new Date(Date.now() - SOLD_WINDOW_DAYS * 86_400_000)),
+            sql`not exists (select 1 from listings s where s.relisted_from = ${listings.id})`,
+          ),
         ),
         isNotNull(listings.make),
         isNotNull(listings.model),

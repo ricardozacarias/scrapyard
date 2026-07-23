@@ -57,3 +57,9 @@ jobs:
           else
             pnpm scrape -- --pages "$PAGES"
           fi
+
+      # Link delisted ads to their reposts (see apps/scraper/src/link-relists.ts)
+      # so "sold" analytics can exclude relists. Idempotent; runs after the
+      # scrape's deactivation pass so freshly-delisted ads are considered.
+      - name: Link relisted ads
+        run: pnpm --filter scraper exec tsx src/link-relists.ts
